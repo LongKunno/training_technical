@@ -1,0 +1,13 @@
+FROM golang:1.22-alpine
+
+WORKDIR /app
+
+# Cài đặt công cụ Air để phục vụ Hot-Reload code cho Golang
+RUN go install github.com/air-verse/air@latest
+
+# Cache các thư viện
+COPY go.mod ./
+RUN go mod download || true
+
+# Khi container chạy, gọi Air để tự động rerun code mỗi khi save file
+CMD ["air", "-c", ".air.toml"]

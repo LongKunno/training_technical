@@ -1,0 +1,14 @@
+FROM python:3.12-slim
+
+WORKDIR /app
+
+# Vô hiệu hóa byte-code (.pyc) và cấu hình log unbuffered
+ENV PYTHONDONTWRITEBYTECODE=1 
+ENV PYTHONUNBUFFERED=1
+
+# Cài đặt thư viện trước để cache Docker layer
+COPY requirements.txt .
+RUN pip install --no-cache-dir -r requirements.txt
+
+# Khởi chạy server FastAPI với cờ --reload để tự động nhận diện code mới khi user Save file
+CMD ["uvicorn", "app.main:app", "--host", "0.0.0.0", "--port", "8000", "--reload"]
