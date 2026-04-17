@@ -1,45 +1,6 @@
-# Quy tắc dành cho AI Assistants (.antigravityrules) - ENTERPRISE EDITION
+# Quy tắc dành cho AI Assistants (.antigravityrules)
 
-## 0. QUY TẮC AN TOÀN TỐI THƯỢNG (CRITICAL BẮT BUỘC)
-- **CÁCH LY MÔI TRƯỜNG**: KHÔNG BAO GIỜ thực thi cài đặt package (`pip install`, `go get`, v.v) trực tiếp lên môi trường gốc của máy chủ/máy trạm người dùng. Đối với Python, luôn sử dụng Virtualenv (`.venv`). Đối với dự án nói chung, ưu tiên sử dụng Docker.
-- **KHÔNG CÀI SERVICE GỐC**: Các dịch vụ hạ tầng như PostgreSQL, Redis, Kafka, Kong BẮT BUỘC phải chạy ngầm qua `docker-compose`. Tuyệt đối không cài phần mềm trực tiếp lên OS của máy tính.
-- **XIN PHÉP TRƯỚC KHI CHẠY**: Chỉ được tự động thực thi các script vô hại (tạo file/folder, đọc file). Các thao tác can thiệp như cài app hệ thống, migrate DB, restart server bắt buộc phải DỪNG LẠI hỏi ý kiến lập trình viên.
+## Docker-only test rule
 
-
-## 1. Project Context (Ngữ cảnh Dự án lớn)
-- **Tên dự án:** Crypto Trading Simulator.
-- **Quy mô định chuẩn:** Sản phẩm cấp độ Enterprise, độ tin cậy cực cao, sẵn sàng phục vụ lượng truy cập lớn (Production-ready).
-- **Mục tiêu nền tảng:** Áp dụng nghiêm ngặt các tiêu chuẩn Microservices của các Big Tech: Đảm bảo Testing, Logging, Documentation và phân quyền rõ ràng.
-- **Ngôn ngữ xử lý:** Giao tiếp với Developer và viết Comment giải thích logic luôn bằng **Tiếng Việt**.
-
-## 2. Tech Stack Core & Tools
-- **Lõi Trading (Golang):** Dùng `gin` hoặc `fiber` (Web), `gorm` (SQL). Xử lý dữ liệu in-memory tốc độ cao bằng Mutex và Channels.
-- **Data Pipeline (Python 3.12+):** `FastAPI` (Web API/Healthcheck), `Celery` + `RabbitMQ` (CronJob/Workers), `Pydantic` (Validation).
-- **Hệ thống trung gian:** `Apache Kafka` (Stream messages), `Redis` (Cache), `PostgreSQL` (DB).
-- **Quan trắc (Observability):** `Prometheus` (Metrics), `Loki/ELK` (Log management).
-
-## 3. Strict Coding Standards (Tiêu chuẩn Code Khắc khe)
-**A. Nguyên tắc chung:**
-- Tất cả chức năng cốt lõi (Core Business Logic) đều phải áp dụng Design Patterns phù hợp.
-- Tất cả API trả về cấu trúc JSON Response Error chuẩn (VD rfc7807) và có Message nội bộ. Tránh văng raw error stacktrace ra ngoài.
-
-**B. Testing & TDD:**
-- BẮT BUỘC: Test coverage > 80% cho phân hệ logic tính giá, tài khoản.
-- Python: Viết unit test bằng `pytest` (mock các lời gọi API ngoài).
-- Golang: Dùng testing framework nội bộ (go test) kết hợp gomock để giả lập interface.
-
-**C. Database & Migrations:**
-- KHÔNG BAO GIỜ sửa trực tiếp bảng hay cấu trúc Database bằng câu truy vấn chạy tay.
-- Mọi thay đổi bắt buộc phải thông qua Migration files (`golang-migrate` cho Go hoặc `Alembic` cho Python).
-
-**D. API Documentation:**
-- Bắt buộc phải có Swagger/OpenAPI UI tự render từ Source Code. Dùng annotation chuẩn để comment từng Params, Response code.
-
-## 4. Git & CI/CD Workflow
-- Commit messages bắt buộc tuân theo chuẩn **Conventional Commits** (feat, fix, docs, chore, refactor, test).
-- Code phải vượt qua các linter chuẩn trước khi cho qua. Python: Dùng `ruff` và `mypy`. Golang: Dùng `golangci-lint`.
-- Toàn bộ service phải có `Dockerfile` đa bước (multi-stage build) để nén dung lượng size cực nhẹ.
-
-## 5. Security & Stability
-- Phân quyền Auth bảo vệ bằng JWT Token qua Kong / Middleware.
-- Quản lý memory chặt: Cancel context ngay khi kết thúc goroutine (Golang), không để object treo trên RAM (Python).
+- MỌI loại test, bao gồm unit test, integration test, smoke test, end-to-end test hoặc benchmark dùng để kiểm chứng logic, đều chỉ được chạy bên trong Docker containers.
+- Không được chạy `go test`, `pytest` hoặc test command tương đương trực tiếp trên máy host.

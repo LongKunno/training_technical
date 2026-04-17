@@ -1,0 +1,40 @@
+name: docker-ci
+
+on:
+  push:
+  pull_request:
+
+jobs:
+  verify:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v3
+
+      - name: Build service images
+        run: docker compose build core_trading data_pipeline simulator_ui
+
+      - name: Lint Go
+        run: make lint-go
+
+      - name: Lint Python
+        run: make lint-py
+
+      - name: Test Go
+        run: make test-go
+
+      - name: Test Python
+        run: make test-py
+
+      - name: Smoke paper trading flow
+        run: make smoke-paper
+
+      - name: Smoke Kafka bridge flow
+        run: make smoke-paper-kafka
+
+      - name: Smoke session restore flow
+        run: make smoke-restore

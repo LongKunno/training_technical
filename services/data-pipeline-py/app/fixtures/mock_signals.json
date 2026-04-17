@@ -1,0 +1,42 @@
+[
+  {
+    "strategy_id": "baseline-trend",
+    "signal_id": "baseline-buy-btc",
+    "symbol": "BTCUSDT",
+    "side": "buy",
+    "notional": 100.0,
+    "price_hint": 100.0,
+    "timestamp": "2026-04-17T00:00:00Z",
+    "scenario": "baseline"
+  },
+  {
+    "strategy_id": "baseline-trend",
+    "signal_id": "baseline-sell-btc",
+    "symbol": "BTCUSDT",
+    "side": "sell",
+    "quantity": 1.0,
+    "price_hint": 130.0,
+    "timestamp": "2026-04-17T00:10:00Z",
+    "scenario": "baseline"
+  },
+  {
+    "strategy_id": "volatility-defender",
+    "signal_id": "volatility-buy-btc",
+    "symbol": "BTCUSDT",
+    "side": "buy",
+    "notional": 150.0,
+    "price_hint": 95.0,
+    "timestamp": "2026-04-17T00:00:00Z",
+    "scenario": "volatility-spike"
+  },
+  {
+    "strategy_id": "volatility-defender",
+    "signal_id": "volatility-sell-btc",
+    "symbol": "BTCUSDT",
+    "side": "sell",
+    "quantity": 1.0,
+    "price_hint": 120.0,
+    "timestamp": "2026-04-17T00:06:00Z",
+    "scenario": "volatility-spike"
+  }
+]

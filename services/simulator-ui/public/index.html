@@ -1,0 +1,240 @@
+<!DOCTYPE html>
+<html lang="vi">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>Simulator Control Deck</title>
+    <link rel="preconnect" href="https://fonts.googleapis.com" />
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+    <link
+      href="https://fonts.googleapis.com/css2?family=Space+Grotesk:wght@400;500;700&family=IBM+Plex+Mono:wght@400;500&display=swap"
+      rel="stylesheet"
+    />
+    <link rel="stylesheet" href="/styles.css" />
+  </head>
+  <body>
+    <div class="background-grid"></div>
+    <main class="shell">
+      <section class="hero">
+        <div>
+          <p class="eyebrow">Crypto Trading Simulator</p>
+          <h1>Simulator Control Deck</h1>
+          <p class="lede">
+            Một bảng điều khiển cho paper trading session, market replay, strategy mock và audit feed.
+          </p>
+        </div>
+        <div class="hero-metrics">
+          <div class="metric-card">
+            <span>Session</span>
+            <strong id="session-status">loading</strong>
+            <small id="session-id">-</small>
+          </div>
+          <div class="metric-card">
+            <span>Total Equity</span>
+            <strong id="total-equity">-</strong>
+            <small id="session-last-event">-</small>
+          </div>
+        </div>
+      </section>
+
+      <section class="controls-grid">
+        <article class="panel">
+          <h2>Session</h2>
+          <label>
+            Session ID
+            <input id="session-id-input" placeholder="manual-session" />
+          </label>
+          <div class="button-row">
+            <button data-action="start-session" class="accent">Start</button>
+            <button data-action="reset-session">Reset</button>
+            <button data-action="stop-session" class="danger">Stop</button>
+          </div>
+        </article>
+
+        <article class="panel">
+          <h2>Market Replay</h2>
+          <label>
+            Scenario
+            <select id="market-scenario"></select>
+          </label>
+          <label>
+            Transport
+            <select id="market-transport">
+              <option value="http">HTTP</option>
+              <option value="kafka">Kafka</option>
+              <option value="both">Both</option>
+            </select>
+          </label>
+          <label>
+            Speed Multiplier
+            <input id="market-speed" type="number" min="0" step="0.5" value="0" />
+          </label>
+          <div class="button-row">
+            <button data-action="publish-market" class="accent">Publish Latest</button>
+            <button data-action="replay-market">Replay Scenario</button>
+          </div>
+        </article>
+
+        <article class="panel">
+          <h2>Strategy Mock</h2>
+          <label>
+            Scenario
+            <select id="strategy-scenario"></select>
+          </label>
+          <label>
+            Strategy
+            <select id="strategy-id">
+              <option value="">All strategies</option>
+            </select>
+          </label>
+          <label>
+            Limit
+            <input id="strategy-limit" type="number" min="0" step="1" value="1" />
+          </label>
+          <label>
+            Offset
+            <input id="strategy-offset" type="number" min="0" step="1" value="0" />
+          </label>
+          <div class="button-row">
+            <button data-action="publish-signals" class="accent">Publish Slice</button>
+            <button data-action="replay-signals">Replay All</button>
+          </div>
+        </article>
+
+        <article class="panel">
+          <h2>Manual Signal</h2>
+          <label>
+            Strategy ID
+            <input id="manual-strategy-id" value="manual-console" />
+          </label>
+          <label>
+            Signal ID
+            <input id="manual-signal-id" value="manual-signal-1" />
+          </label>
+          <label>
+            Symbol
+            <input id="manual-symbol" value="BTCUSDT" />
+          </label>
+          <div class="split-row">
+            <label>
+              Side
+              <select id="manual-side">
+                <option value="buy">Buy</option>
+                <option value="sell">Sell</option>
+              </select>
+            </label>
+            <label>
+              Price Hint
+              <input id="manual-price" type="number" value="100" />
+            </label>
+          </div>
+          <div class="split-row">
+            <label>
+              Quantity
+              <input id="manual-quantity" type="number" value="1" />
+            </label>
+            <label>
+              Notional
+              <input id="manual-notional" type="number" value="0" />
+            </label>
+          </div>
+          <button data-action="send-manual-signal" class="accent">Send Signal</button>
+        </article>
+      </section>
+
+      <section class="summary-grid">
+        <article class="panel stats-panel">
+          <h2>Portfolio</h2>
+          <div class="stat-list" id="portfolio-stats"></div>
+        </article>
+        <article class="panel stats-panel">
+          <h2>Report</h2>
+          <div class="stat-list" id="report-stats"></div>
+        </article>
+        <article class="panel stats-panel">
+          <h2>Rules</h2>
+          <div class="stat-list" id="rules-stats"></div>
+        </article>
+      </section>
+
+      <section class="data-grid">
+        <article class="panel table-panel">
+          <div class="panel-head">
+            <h2>Positions</h2>
+            <span id="positions-count">0</span>
+          </div>
+          <div class="table-wrap">
+            <table>
+              <thead>
+                <tr>
+                  <th>Symbol</th>
+                  <th>Qty</th>
+                  <th>Avg</th>
+                  <th>Mark</th>
+                  <th>UPnL</th>
+                </tr>
+              </thead>
+              <tbody id="positions-body"></tbody>
+            </table>
+          </div>
+        </article>
+
+        <article class="panel table-panel">
+          <div class="panel-head">
+            <h2>Orders</h2>
+            <span id="orders-count">0</span>
+          </div>
+          <div class="table-wrap">
+            <table>
+              <thead>
+                <tr>
+                  <th>Time</th>
+                  <th>Symbol</th>
+                  <th>Side</th>
+                  <th>Qty</th>
+                  <th>Price</th>
+                  <th>Fee</th>
+                </tr>
+              </thead>
+              <tbody id="orders-body"></tbody>
+            </table>
+          </div>
+        </article>
+      </section>
+
+      <section class="data-grid">
+        <article class="panel table-panel">
+          <div class="panel-head">
+            <h2>Audit Feed</h2>
+            <span id="audit-count">0</span>
+          </div>
+          <div class="audit-feed" id="audit-feed"></div>
+        </article>
+
+        <article class="panel table-panel">
+          <div class="panel-head">
+            <h2>Strategy Signals</h2>
+            <span id="signals-count">0</span>
+          </div>
+          <div class="table-wrap">
+            <table>
+              <thead>
+                <tr>
+                  <th>Time</th>
+                  <th>Strategy</th>
+                  <th>Signal</th>
+                  <th>Symbol</th>
+                  <th>Side</th>
+                </tr>
+              </thead>
+              <tbody id="signals-body"></tbody>
+            </table>
+          </div>
+        </article>
+      </section>
+
+      <div id="toast" class="toast hidden"></div>
+    </main>
+    <script src="/app.js" type="module"></script>
+  </body>
+</html>

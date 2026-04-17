@@ -1,0 +1,29 @@
+package papertrading
+
+import "errors"
+
+var (
+	ErrInvalidBalance           = errors.New("invalid initial balance")
+	ErrInvalidFeeRate           = errors.New("invalid fee rate")
+	ErrInvalidSlippageRate      = errors.New("invalid slippage rate")
+	ErrInvalidStrategyID        = errors.New("invalid strategy id")
+	ErrInvalidSignalID          = errors.New("invalid signal id")
+	ErrInvalidNotional          = errors.New("invalid notional")
+	ErrInvalidSymbol            = errors.New("invalid symbol")
+	ErrInvalidTimestamp         = errors.New("invalid timestamp")
+	ErrInvalidLimit             = errors.New("invalid limit")
+	ErrInvalidOffset            = errors.New("invalid offset")
+	ErrInvalidOrderSide         = errors.New("invalid order side")
+	ErrInvalidQuantity          = errors.New("invalid quantity")
+	ErrInvalidPrice             = errors.New("invalid price")
+	ErrSessionStopped           = errors.New("session stopped")
+	ErrSignalAlreadyProcessed   = errors.New("signal already processed")
+	ErrSymbolBlocked            = errors.New("symbol blocked")
+	ErrMaxPositionExceeded      = errors.New("max position quantity exceeded")
+	ErrMaxOrderNotionalExceeded = errors.New("max order notional exceeded")
+	ErrMaxDailyLossExceeded     = errors.New("max daily loss exceeded")
+	ErrCooldownActive           = errors.New("cooldown active")
+	ErrMaxOpenNotionalExceeded  = errors.New("max open notional exceeded")
+	ErrInsufficientFunds        = errors.New("insufficient funds")
+	ErrInsufficientAsset        = errors.New("insufficient asset quantity")
+)

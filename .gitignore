@@ -1,0 +1,19 @@
+# Go dev artifacts
+services/core-trading-go/tmp/
+
+# Python dev/test artifacts
+__pycache__/
+*.py[cod]
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+.coverage
+.coverage.*
+htmlcov/
+
+# Local environment
+.env
+.venv/
+
+# OS/editor noise
+.DS_Store

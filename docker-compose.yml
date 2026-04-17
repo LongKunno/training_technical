@@ -1,5 +1,3 @@
-version: '3.8'
-
 services:
   # === INFRASTRUCTURE ===
   postgres:
@@ -9,16 +7,57 @@ services:
       POSTGRES_USER: root
       POSTGRES_PASSWORD: rootpassword
       POSTGRES_DB: crypto_sim
-    ports:
-      - "5432:5432"
     volumes:
       - postgres_data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U root -d crypto_sim"]
+      interval: 5s
+      timeout: 5s
+      retries: 12
 
   redis:
     image: redis:7-alpine
     container_name: crypto_redis
-    ports:
-      - "6379:6379"
+
+  kafka:
+    image: apache/kafka:3.9.2
+    container_name: crypto_kafka
+    environment:
+      - KAFKA_NODE_ID=1
+      - KAFKA_PROCESS_ROLES=broker,controller
+      - KAFKA_LISTENERS=PLAINTEXT://:9092,CONTROLLER://:9093
+      - KAFKA_ADVERTISED_LISTENERS=PLAINTEXT://kafka:9092
+      - KAFKA_CONTROLLER_LISTENER_NAMES=CONTROLLER
+      - KAFKA_LISTENER_SECURITY_PROTOCOL_MAP=CONTROLLER:PLAINTEXT,PLAINTEXT:PLAINTEXT
+      - KAFKA_CONTROLLER_QUORUM_VOTERS=1@kafka:9093
+      - KAFKA_OFFSETS_TOPIC_REPLICATION_FACTOR=1
+      - KAFKA_TRANSACTION_STATE_LOG_REPLICATION_FACTOR=1
+      - KAFKA_TRANSACTION_STATE_LOG_MIN_ISR=1
+      - KAFKA_GROUP_INITIAL_REBALANCE_DELAY_MS=0
+      - KAFKA_AUTO_CREATE_TOPICS_ENABLE=true
+      - KAFKA_LOG_DIRS=/var/lib/kafka/data
+    volumes:
+      - kafka_data:/var/lib/kafka/data
+    healthcheck:
+      test: ["CMD-SHELL", "/opt/kafka/bin/kafka-broker-api-versions.sh --bootstrap-server localhost:9092 >/dev/null 2>&1"]
+      interval: 5s
+      timeout: 5s
+      retries: 12
+
+  migrations:
+    image: migrate/migrate:v4.18.1
+    container_name: crypto_migrations
+    command:
+      [
+        "-path=/migrations",
+        "-database=postgres://root:rootpassword@postgres:5432/crypto_sim?sslmode=disable",
+        "up",
+      ]
+    volumes:
+      - ./services/core-trading-go/migrations:/migrations:ro
+    depends_on:
+      postgres:
+        condition: service_healthy
 
   # === MICROSERVICES ===
   core_trading:
@@ -27,16 +66,38 @@ services:
       dockerfile: Dockerfile.dev
     container_name: core_trading_go
     ports:
-      - "8080:8080"
+      - "${CORE_TRADING_HOST_PORT:-18080}:8080"
     volumes:
       # Mount code cho hot-reload
-      - ./services/core-trading-go:/app 
+      - ./services/core-trading-go:/app
+      # Tách artifact build của Air khỏi bind-mount để tránh sinh rác trên host
+      - core_trading_tmp:/app/tmp
     environment:
-      - DB_URI=postgres://root:rootpassword@postgres:5432/crypto_sim
+      - DB_URI=${DB_URI:-postgres://root:rootpassword@postgres:5432/crypto_sim?sslmode=disable}
       - REDIS_URL=redis:6379
+      - PAPER_STATE_STORE_ENABLED=${PAPER_STATE_STORE_ENABLED:-true}
+      - PAPER_ACCOUNT_ID=${PAPER_ACCOUNT_ID:-paper-account-1}
+      - PAPER_INITIAL_BALANCE=${PAPER_INITIAL_BALANCE:-10000}
+      - PAPER_FEE_RATE=${PAPER_FEE_RATE:-0.001}
+      - PAPER_SLIPPAGE_RATE=${PAPER_SLIPPAGE_RATE:-0.001}
+      - PAPER_ALLOWED_SYMBOLS=${PAPER_ALLOWED_SYMBOLS:-}
+      - PAPER_MAX_POSITION_QUANTITY=${PAPER_MAX_POSITION_QUANTITY:-0}
+      - PAPER_MAX_ORDER_NOTIONAL=${PAPER_MAX_ORDER_NOTIONAL:-0}
+      - PAPER_MAX_DAILY_LOSS=${PAPER_MAX_DAILY_LOSS:-0}
+      - PAPER_COOLDOWN_SECONDS=${PAPER_COOLDOWN_SECONDS:-0}
+      - PAPER_MAX_OPEN_NOTIONAL=${PAPER_MAX_OPEN_NOTIONAL:-0}
+      - CORE_TRADING_KAFKA_BOOTSTRAP_SERVERS=${CORE_TRADING_KAFKA_BOOTSTRAP_SERVERS:-kafka:9092}
+      - CORE_TRADING_KAFKA_TOPIC=${CORE_TRADING_KAFKA_TOPIC:-price-ticks-v1}
+      - CORE_TRADING_KAFKA_GROUP_ID=${CORE_TRADING_KAFKA_GROUP_ID:-core-trading-paper-engine}
     depends_on:
-      - postgres
-      - redis
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_started
+      kafka:
+        condition: service_healthy
+      migrations:
+        condition: service_completed_successfully
 
   data_pipeline:
     build: 
@@ -44,16 +105,56 @@ services:
       dockerfile: Dockerfile.dev
     container_name: data_pipeline_py
     ports:
-      - "8000:8000"
+      - "${DATA_PIPELINE_HOST_PORT:-18000}:8000"
     volumes:
       # Mount code cho hot-reload
       - ./services/data-pipeline-py:/app
     environment:
-      - DB_URI=postgresql://root:rootpassword@postgres:5432/crypto_sim
+      - DB_URI=${PY_DATA_PIPELINE_DB_URI:-postgresql://root:rootpassword@postgres:5432/crypto_sim}
       - REDIS_URL=redis://redis:6379/0
+      - CORE_TRADING_INTERNAL_BASE_URL=${CORE_TRADING_INTERNAL_BASE_URL:-http://core_trading:8080}
+      - MARKET_DATA_FIXTURE_PATH=${MARKET_DATA_FIXTURE_PATH:-/app/app/fixtures/mock_ticks.json}
+      - STRATEGY_SIGNAL_FIXTURE_PATH=${STRATEGY_SIGNAL_FIXTURE_PATH:-/app/app/fixtures/mock_signals.json}
+      - MARKET_DATA_KAFKA_BOOTSTRAP_SERVERS=${MARKET_DATA_KAFKA_BOOTSTRAP_SERVERS:-kafka:9092}
+      - MARKET_DATA_KAFKA_TOPIC=${MARKET_DATA_KAFKA_TOPIC:-price-ticks-v1}
     depends_on:
-      - postgres
-      - redis
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_started
+      kafka:
+        condition: service_healthy
+      core_trading:
+        condition: service_started
+
+  simulator_ui:
+    build:
+      context: ./services/simulator-ui
+      dockerfile: Dockerfile
+    container_name: simulator_ui
+    ports:
+      - "${SIMULATOR_UI_HOST_PORT:-18020}:80"
+    depends_on:
+      core_trading:
+        condition: service_started
+      data_pipeline:
+        condition: service_started
+
+  smoke_runner:
+    image: badouralix/curl-jq:latest
+    profiles: ["ops"]
+    entrypoint: ["sh", "/scripts/smoke-paper-trading.sh"]
+    volumes:
+      - ./scripts:/scripts:ro
+    depends_on:
+      core_trading:
+        condition: service_started
+      data_pipeline:
+        condition: service_started
+      simulator_ui:
+        condition: service_started
 
 volumes:
   postgres_data:
+  core_trading_tmp:
+  kafka_data:
