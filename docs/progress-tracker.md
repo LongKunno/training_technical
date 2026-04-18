@@ -15,11 +15,13 @@
   - `GET /api/paper/positions`
   - `GET /api/paper/rules`
   - `GET /api/paper/session`
+  - `GET /api/paper/sessions`
   - `POST /api/paper/session/start`
   - `POST /api/paper/session/reset`
   - `POST /api/paper/session/stop`
   - `GET /api/paper/audit`
   - `GET /api/paper/report`
+  - `GET /api/paper/timeline`
   - `GET /api/paper/orders`
   - `POST /api/paper/orders`
   - `POST /internal/market/prices`
@@ -33,6 +35,8 @@
   - `risk controls` cho symbol, position size, order notional, daily loss, cooldown, open exposure
   - `audit trail` theo phiên
   - `session report` gồm PnL, fee, slippage cost, drawdown, orders theo symbol
+  - session history summary và truy vấn `report/audit/timeline` theo `session_id`
+  - timeline equity/drawdown theo event và SSE stream cho current session
   - `mark price` tách biệt khỏi `last trade price`
   - rollback state nếu persist xuống store thất bại
 - `GET /api/paper/orders` đã hỗ trợ:
@@ -49,6 +53,7 @@
   - `paper_sessions`
   - `paper_audit_events`
   - restore `session`, `audit`, `report snapshot`, `processed signal ids` sau restart
+  - timeline được lưu trong `report_snapshot` để đọc lại theo session history
 - Go đã có Kafka consumer cho `PriceTickV1`, và consumer hiện commit/continue thay vì dừng hẳn khi tick bị reject.
 - Python service tại `services/data-pipeline-py` đã có:
   - `GET /health`
@@ -84,7 +89,7 @@
   - `ruff` config
   - GitHub Actions workflow `docker-ci`
   - smoke script liên service
-  - dashboard nội bộ v1 ở `services/simulator-ui`
+  - dashboard nội bộ v1 ở `services/simulator-ui`, tách `current session` và `selected session` để tránh trộn ngữ cảnh realtime/lịch sử
   - `.antigravityrules` tối giản chỉ giữ rule `Docker-only test`
 
 ### Những gì đã verify thành công trong Docker
@@ -124,6 +129,7 @@ http://localhost:18020
 ```bash
 curl http://localhost:18080/api/paper/rules
 curl http://localhost:18080/api/paper/session
+curl 'http://localhost:18080/api/paper/sessions?limit=20&offset=0'
 curl -X POST http://localhost:18080/api/paper/session/start \
   -H 'Content-Type: application/json' \
   -d '{"session_id":"manual-session"}'
@@ -139,6 +145,9 @@ curl -X POST http://localhost:18080/internal/signals \
   -d '{"strategy_id":"manual","signal_id":"sig-1","symbol":"BTCUSDT","side":"buy","notional":100,"price_hint":100,"timestamp":"2026-04-17T00:00:00Z"}'
 curl 'http://localhost:18080/api/paper/audit?limit=20&offset=0'
 curl http://localhost:18080/api/paper/report
+curl 'http://localhost:18080/api/paper/report?session_id=manual-session'
+curl 'http://localhost:18080/api/paper/audit?session_id=manual-session&limit=20&offset=0'
+curl 'http://localhost:18080/api/paper/timeline?session_id=manual-session'
 ```
 
 ### Kiểm tra mock market data API
@@ -208,21 +217,22 @@ make clean-docker-all
 - 2026-04-17: Thêm `session lifecycle`, `SignalV1`, `risk controls`, `audit trail` và `session report` cho simulator.
 - 2026-04-17: Thêm strategy mock flow ở Python với signal fixtures, publish slice và replay.
 - 2026-04-17: Thêm dashboard nội bộ v1 chạy trong Docker qua service `simulator_ui`.
+- 2026-04-18: Mở rộng Go/UI với `GET /api/paper/sessions`, `report/audit/timeline` theo `session_id`, SSE timeline cho current session, session history panel và selected-session detail trên dashboard.
 - 2026-04-17: Mở rộng smoke flow sang chuỗi `UI -> start session -> publish strategy signal -> publish price -> report/audit -> stop session`, đồng thời thêm smoke riêng cho Kafka path và restore path.
 - 2026-04-17: Chốt `Docker-only` verification cho `lint-go`, `lint-py`, `test-go`, `test-py`, `smoke-paper`, `smoke-paper-kafka`, `smoke-restore`.
 
 ## 4. Next Recommended Slices
 
-1. Nếu muốn dashboard sâu hơn, bước hợp lý tiếp theo là thêm timeline chart cho equity/drawdown thay vì chỉ snapshot hiện tại.
-2. Nếu muốn tái hiện multi-session rõ ràng hơn, thêm endpoint liệt kê lịch sử sessions thay vì chỉ load latest session.
+1. Nếu muốn dashboard sâu hơn, bước hợp lý tiếp theo là chuyển từ timeline columns sang line chart thực thụ với overlay equity/drawdown.
+2. Nếu muốn multi-session mạnh hơn, thêm detail page hoặc paging sâu cho session history thay vì chỉ list nhanh trong dashboard.
 3. Nếu local dev cần nhanh hơn, cân nhắc cache hoặc prebuilt image riêng cho `golangci-lint` để khỏi cài lại trong mỗi lượt `make lint-go`.
-4. Nếu muốn tiến tới phase tiếp theo, có thể thêm alerting/risk monitor panel và strategy comparison view trên dashboard.
+4. Nếu muốn tiến tới phase tiếp theo, có thể thêm strategy comparison view và alerting panel chi tiết hơn trên dashboard.
 
 ## 5. Open Risks / Decisions
 
 - `StateStore.SaveState` hiện xóa và ghi lại `paper_orders`, `paper_positions`, `market_prices`, và audit rows của current session để đồng bộ với session reset; cách này phù hợp local simulator v1 nhưng chưa tối ưu cho throughput cao.
-- Session history đã được lưu, nhưng API public hiện vẫn chỉ expose `current session` thay vì list nhiều phiên.
-- Dashboard hiện là `operator console` dùng static UI + nginx proxy; đủ dùng cho local dev nhưng chưa có auth, charting sâu hay websocket updates.
+- Session history đã được expose ở mức list + selected-session reads, nhưng chưa có paging sâu, sort options hay detail page riêng.
+- Dashboard hiện là `operator console` dùng static UI + nginx proxy; đủ dùng cho local dev nhưng chưa có auth, charting sâu hay websocket updates ngoài SSE timeline của current session.
 - `make lint-go` vẫn cài `golangci-lint` trong container mỗi lần chạy để giữ đúng Go toolchain; sạch cho host nhưng tốn thời gian hơn một chút.
 
 ## 6. Update Checklist

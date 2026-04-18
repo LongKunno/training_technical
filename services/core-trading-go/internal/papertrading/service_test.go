@@ -673,6 +673,16 @@ func TestNewEngineFromPersistentStateRestoresSessionRuntime(t *testing.T) {
 					FeesPaid:     0.2,
 				},
 			},
+			Timeline: []papertrading.SessionTimelinePoint{
+				{
+					Timestamp:     time.Date(2026, 4, 17, 0, 0, 0, 0, time.UTC),
+					Equity:        1000,
+					CashBalance:   1000,
+					UnrealizedPnL: 0,
+					Drawdown:      0,
+					EventType:     "session_started",
+				},
+			},
 		},
 		PeakEquity:       1015,
 		ProcessedSignals: []string{"sig-1"},
@@ -696,6 +706,9 @@ func TestNewEngineFromPersistentStateRestoresSessionRuntime(t *testing.T) {
 	if report.MaxDrawdown != 15 {
 		t.Fatalf("expected max drawdown 15, got %v", report.MaxDrawdown)
 	}
+	if len(report.Timeline) != 1 {
+		t.Fatalf("expected restored timeline length 1, got %d", len(report.Timeline))
+	}
 
 	events := engine.AuditTrail(10, 0)
 	if len(events) != 2 {
@@ -713,6 +726,47 @@ func TestNewEngineFromPersistentStateRestoresSessionRuntime(t *testing.T) {
 	})
 	if !errors.Is(err, papertrading.ErrSignalAlreadyProcessed) {
 		t.Fatalf("expected signal already processed, got %v", err)
+	}
+}
+
+func TestTimelineTracksOrderAndMarketEvents(t *testing.T) {
+	t.Parallel()
+
+	engine, err := papertrading.NewEngine("paper-account-1", 1000)
+	if err != nil {
+		t.Fatalf("failed to create engine: %v", err)
+	}
+
+	if _, err := engine.PlaceMarketOrder(papertrading.PlaceOrderRequest{
+		Symbol:   "BTCUSDT",
+		Side:     papertrading.OrderSideBuy,
+		Quantity: 1,
+		Price:    100,
+	}); err != nil {
+		t.Fatalf("failed to place order: %v", err)
+	}
+
+	if err := engine.ApplyMarketPrice(marketdata.PriceTickV1{
+		Symbol:    "BTCUSDT",
+		Price:     150,
+		Source:    "mock-replay",
+		Timestamp: time.Date(2026, 4, 17, 0, 5, 0, 0, time.UTC),
+	}); err != nil {
+		t.Fatalf("failed to apply market price: %v", err)
+	}
+
+	timeline, err := engine.TimelineBySession(engine.SessionSummary().ID)
+	if err != nil {
+		t.Fatalf("failed to load timeline: %v", err)
+	}
+	if len(timeline) < 3 {
+		t.Fatalf("expected at least 3 timeline points, got %d", len(timeline))
+	}
+	if timeline[len(timeline)-1].EventType != "market_tick" {
+		t.Fatalf("expected last timeline event market_tick, got %q", timeline[len(timeline)-1].EventType)
+	}
+	if timeline[len(timeline)-1].Equity != 1050 {
+		t.Fatalf("expected final equity 1050, got %v", timeline[len(timeline)-1].Equity)
 	}
 }
 
@@ -734,4 +788,20 @@ func (s *failingStore) SaveState(_ papertrading.PersistentState) error {
 
 func (s *failingStore) LoadState(_ string) (papertrading.PersistentState, bool, error) {
 	return papertrading.PersistentState{}, false, nil
+}
+
+func (s *failingStore) ListSessions(_ string, _ papertrading.SessionHistoryFilter) ([]papertrading.SessionHistoryEntry, error) {
+	return nil, nil
+}
+
+func (s *failingStore) LoadSessionReport(_ string, _ string) (papertrading.SessionReport, bool, error) {
+	return papertrading.SessionReport{}, false, nil
+}
+
+func (s *failingStore) LoadSessionAudit(_ string, _ string, _ int, _ int) ([]papertrading.AuditEvent, bool, error) {
+	return nil, false, nil
+}
+
+func (s *failingStore) LoadSessionTimeline(_ string, _ string) ([]papertrading.SessionTimelinePoint, bool, error) {
+	return nil, false, nil
 }

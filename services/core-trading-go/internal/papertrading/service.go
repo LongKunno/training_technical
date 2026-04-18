@@ -31,8 +31,11 @@ type Engine struct {
 	symbolStats      map[string]sessionSymbolMetrics
 	peakEquity       float64
 	maxDrawdown      float64
+	timeline         []SessionTimelinePoint
 	lastOrderAt      map[string]time.Time
 	processedSignals map[string]struct{}
+	subscribers      map[uint64]chan SessionTimelinePoint
+	subscriberSeq    uint64
 }
 
 func NewEngine(accountID string, initialBalance float64) (*Engine, error) {
@@ -59,6 +62,7 @@ func NewEngineWithStore(accountID string, initialBalance float64, rules Simulati
 		markPrices:      make(map[string]marketdata.PriceTickV1),
 		rules:           rules,
 		store:           store,
+		subscribers:     make(map[uint64]chan SessionTimelinePoint),
 	}
 	engine.bootstrapRuntimeState(time.Now().UTC())
 
@@ -84,6 +88,7 @@ func NewEngineFromPersistentState(state PersistentState, store StateStore) (*Eng
 		realizedPnL:     state.RealizedPnL,
 		rules:           state.Rules,
 		store:           store,
+		subscribers:     make(map[uint64]chan SessionTimelinePoint),
 	}
 	engine.restoreRuntimeState(state, time.Now().UTC())
 
@@ -232,8 +237,9 @@ func (e *Engine) ApplyMarketPrices(ticks []marketdata.PriceTickV1) (int, error) 
 			"price":  tick.Price,
 			"source": tick.Source,
 		})
+		e.updateDrawdownLocked()
+		e.appendTimelinePointLocked(tick.Timestamp, "market_tick")
 	}
-	e.updateDrawdownLocked()
 
 	if err := e.persistLocked(); err != nil {
 		e.restoreLockedState(previousState)
@@ -414,6 +420,10 @@ func clonePortfolioPositions(positions []PortfolioPositionSummary) []PortfolioPo
 	return slices.Clone(positions)
 }
 
+func cloneTimelinePoints(input []SessionTimelinePoint) []SessionTimelinePoint {
+	return slices.Clone(input)
+}
+
 func filterOrders(orders []PaperOrder, filter OrderFilter) []PaperOrder {
 	if filter.Limit <= 0 {
 		filter.Limit = 50
@@ -459,6 +469,7 @@ type engineStateSnapshot struct {
 	symbolStats      map[string]sessionSymbolMetrics
 	peakEquity       float64
 	maxDrawdown      float64
+	timeline         []SessionTimelinePoint
 	lastOrderAt      map[string]time.Time
 	processedSignals map[string]struct{}
 }
@@ -480,6 +491,7 @@ func (e *Engine) snapshotLockedState() engineStateSnapshot {
 		symbolStats:      cloneSymbolStats(e.symbolStats),
 		peakEquity:       e.peakEquity,
 		maxDrawdown:      e.maxDrawdown,
+		timeline:         cloneTimelinePoints(e.timeline),
 		lastOrderAt:      cloneTimeMap(e.lastOrderAt),
 		processedSignals: cloneSignalIndex(e.processedSignals),
 	}
@@ -501,6 +513,7 @@ func (e *Engine) restoreLockedState(snapshot engineStateSnapshot) {
 	e.symbolStats = snapshot.symbolStats
 	e.peakEquity = snapshot.peakEquity
 	e.maxDrawdown = snapshot.maxDrawdown
+	e.timeline = snapshot.timeline
 	e.lastOrderAt = snapshot.lastOrderAt
 	e.processedSignals = snapshot.processedSignals
 }
@@ -511,6 +524,27 @@ func deriveLastTradePrices(orders []PaperOrder) map[string]float64 {
 		lastTradePrices[order.Symbol] = order.Price
 	}
 	return lastTradePrices
+}
+
+func (e *Engine) SubscribeTimeline() (TimelineSubscription, func()) {
+	e.mu.Lock()
+	defer e.mu.Unlock()
+
+	e.subscriberSeq++
+	id := e.subscriberSeq
+	ch := make(chan SessionTimelinePoint, 32)
+	e.subscribers[id] = ch
+
+	unsubscribe := func() {
+		e.mu.Lock()
+		defer e.mu.Unlock()
+		if subscriber, ok := e.subscribers[id]; ok {
+			delete(e.subscribers, id)
+			close(subscriber)
+		}
+	}
+
+	return ch, unsubscribe
 }
 
 func deriveOrderCounter(orders []PaperOrder) uint64 {

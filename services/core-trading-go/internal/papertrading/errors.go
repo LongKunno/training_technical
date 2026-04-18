@@ -16,6 +16,7 @@ var (
 	ErrInvalidOrderSide         = errors.New("invalid order side")
 	ErrInvalidQuantity          = errors.New("invalid quantity")
 	ErrInvalidPrice             = errors.New("invalid price")
+	ErrSessionNotFound          = errors.New("session not found")
 	ErrSessionStopped           = errors.New("session stopped")
 	ErrSignalAlreadyProcessed   = errors.New("signal already processed")
 	ErrSymbolBlocked            = errors.New("symbol blocked")

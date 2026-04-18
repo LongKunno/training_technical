@@ -24,15 +24,35 @@ const elements = {
   portfolioStats: document.querySelector("#portfolio-stats"),
   reportStats: document.querySelector("#report-stats"),
   rulesStats: document.querySelector("#rules-stats"),
+  riskStats: document.querySelector("#risk-stats"),
+  currentTimelineChart: document.querySelector("#current-timeline-chart"),
+  currentTimelineLegend: document.querySelector("#current-timeline-legend"),
+  sessionHistory: document.querySelector("#session-history"),
+  sessionsCount: document.querySelector("#sessions-count"),
+  sessionSearch: document.querySelector("#session-search"),
+  sessionStatusFilter: document.querySelector("#session-status-filter"),
+  selectedSessionStats: document.querySelector("#selected-session-stats"),
+  selectedReportStats: document.querySelector("#selected-report-stats"),
+  selectedTimelineChart: document.querySelector("#selected-timeline-chart"),
+  selectedTimelineLegend: document.querySelector("#selected-timeline-legend"),
   positionsBody: document.querySelector("#positions-body"),
   ordersBody: document.querySelector("#orders-body"),
-  auditFeed: document.querySelector("#audit-feed"),
+  selectedAuditFeed: document.querySelector("#selected-audit-feed"),
   signalsBody: document.querySelector("#signals-body"),
   positionsCount: document.querySelector("#positions-count"),
   ordersCount: document.querySelector("#orders-count"),
-  auditCount: document.querySelector("#audit-count"),
+  selectedAuditCount: document.querySelector("#selected-audit-count"),
   signalsCount: document.querySelector("#signals-count"),
   toast: document.querySelector("#toast"),
+};
+
+const dashboardState = {
+  currentSessionId: "",
+  selectedSessionId: "",
+  latestSessions: [],
+  timelineStream: null,
+  sessionSearch: "",
+  sessionStatus: "",
 };
 
 async function fetchJSON(url, options = {}) {
@@ -77,6 +97,16 @@ function formatTime(value) {
     return "-";
   }
   return new Date(value).toLocaleString();
+}
+
+function formatShortTime(value) {
+  if (!value) {
+    return "-";
+  }
+  const date = new Date(value);
+  return `${String(date.getHours()).padStart(2, "0")}:${String(
+    date.getMinutes(),
+  ).padStart(2, "0")}`;
 }
 
 function setStats(target, entries) {
@@ -145,8 +175,8 @@ function renderOrders(orders) {
 }
 
 function renderAudit(events) {
-  elements.auditCount.textContent = String(events.length);
-  elements.auditFeed.innerHTML =
+  elements.selectedAuditCount.textContent = String(events.length);
+  elements.selectedAuditFeed.innerHTML =
     events
       .map(
         (event) => `
@@ -156,7 +186,7 @@ function renderAudit(events) {
               <span>${formatTime(event.timestamp)}</span>
             </header>
             <strong>${event.message}</strong>
-            <div class="muted">${event.symbol || "global"} · ${event.id}</div>
+            <div class="muted">${event.symbol || "global"} - ${event.id}</div>
           </article>
         `,
       )
@@ -181,6 +211,111 @@ function renderSignals(signals) {
       )
       .join("") ||
     `<tr><td colspan="5" class="muted">No signals in this scenario.</td></tr>`;
+}
+
+function renderSessionHistory(sessions) {
+  elements.sessionsCount.textContent = String(sessions.length);
+  elements.sessionHistory.innerHTML =
+    sessions
+      .map((session) => {
+        const active = session.session_id === dashboardState.selectedSessionId;
+        return `
+          <article class="session-card ${active ? "active" : ""}" data-session-id="${session.session_id}">
+            <header>
+              <span>${session.status}</span>
+              <span>${formatTime(session.last_event_at)}</span>
+            </header>
+            <strong>${session.session_id}</strong>
+            <small>PnL ${currency(session.total_pnl)} - DD ${currency(session.max_drawdown)} - Orders ${session.filled_orders}</small>
+          </article>
+        `;
+      })
+      .join("") || `<div class="muted">No sessions yet.</div>`;
+}
+
+function renderTimeline(chartElement, legendElement, points, report) {
+  const timeline = points.slice(-18);
+  if (timeline.length === 0) {
+    chartElement.style.setProperty("--points", "1");
+    chartElement.innerHTML = `<div class="timeline-empty muted">No timeline yet.</div>`;
+    legendElement.innerHTML = `
+      <span>Points: 0</span>
+      <span>Last equity: ${currency(0)}</span>
+      <span>Max DD: ${currency(report?.max_drawdown || 0)}</span>
+    `;
+    return;
+  }
+
+  const equityMax = Math.max(...timeline.map((item) => Number(item.equity || 0)), 1);
+  const drawdownMax = Math.max(...timeline.map((item) => Number(item.drawdown || 0)), 1);
+
+  chartElement.style.setProperty("--points", String(Math.max(timeline.length, 1)));
+  chartElement.innerHTML = timeline
+    .map((point) => {
+      const isDrawdown = Number(point.drawdown || 0) > 0;
+      const base = isDrawdown ? drawdownMax : equityMax;
+      const value = isDrawdown ? Number(point.drawdown || 0) : Number(point.equity || 0);
+      const height = Math.max((value / base) * 100, 10);
+      return `
+        <div class="timeline-column" data-label="${formatShortTime(point.timestamp)}">
+          <div class="timeline-bar ${isDrawdown ? "drawdown" : ""}" title="${point.event_type}: ${currency(point.equity)}" style="height:${height}%"></div>
+        </div>
+      `;
+    })
+    .join("");
+
+  legendElement.innerHTML = `
+    <span>Points: ${timeline.length}</span>
+    <span>Last equity: ${currency(timeline[timeline.length - 1]?.equity || 0)}</span>
+    <span>Max DD: ${currency(report?.max_drawdown || 0)}</span>
+  `;
+}
+
+function renderCurrentRiskStats(report, rules, portfolio) {
+  const maxDailyLoss = Number(rules.risk_controls.max_daily_loss || 0);
+  const maxOpenNotional = Number(rules.risk_controls.max_open_notional || 0);
+  setStats(elements.riskStats, [
+    { label: "Rejected Signals", value: String(report.rejected_signals || 0) },
+    {
+      label: "Open Exposure",
+      value: currency(portfolio.total_equity - portfolio.cash_balance),
+    },
+    {
+      label: "Daily Loss Guard",
+      value: maxDailyLoss > 0 ? currency(maxDailyLoss) : "disabled",
+    },
+    {
+      label: "Open Notional Guard",
+      value: maxOpenNotional > 0 ? currency(maxOpenNotional) : "disabled",
+    },
+  ]);
+}
+
+function renderSelectedSession(report) {
+  setStats(elements.selectedSessionStats, [
+    { label: "Session ID", value: report?.session_id || "-" },
+    { label: "Status", value: report?.status || "-" },
+    { label: "Started", value: formatTime(report?.started_at) },
+    { label: "Stopped", value: formatTime(report?.stopped_at) },
+  ]);
+}
+
+function renderSelectedReport(report) {
+  setStats(elements.selectedReportStats, [
+    { label: "Total PnL", value: currency(report?.total_pnl || 0) },
+    { label: "Filled Orders", value: String(report?.filled_orders || 0) },
+    { label: "Rejected Signals", value: String(report?.rejected_signals || 0) },
+    { label: "Fees Paid", value: currency(report?.fees_paid || 0) },
+    { label: "Slippage Cost", value: currency(report?.slippage_cost || 0) },
+    { label: "Max Drawdown", value: currency(report?.max_drawdown || 0) },
+  ]);
+}
+
+function renderSelectedPlaceholder() {
+  renderSelectedSession(null);
+  renderSelectedReport(null);
+  renderAudit([]);
+  renderTimeline(elements.selectedTimelineChart, elements.selectedTimelineLegend, [], null);
 }
 
 function setSelectOptions(target, values, emptyLabel = "") {
@@ -210,15 +345,26 @@ async function loadStrategySignals() {
   }
 }
 
-async function refreshDashboard() {
-  const [sessionPayload, portfolioPayload, reportPayload, rulesPayload, ordersPayload, auditPayload] =
+function buildSessionsQuery() {
+  const query = new URLSearchParams({ limit: "12", offset: "0" });
+  if (dashboardState.sessionSearch) {
+    query.set("q", dashboardState.sessionSearch);
+  }
+  if (dashboardState.sessionStatus) {
+    query.set("status", dashboardState.sessionStatus);
+  }
+  return query.toString();
+}
+
+async function refreshCurrentSection() {
+  const [sessionPayload, portfolioPayload, reportPayload, rulesPayload, ordersPayload, timelinePayload] =
     await Promise.all([
       fetchJSON(core("/api/paper/session")),
       fetchJSON(core("/api/paper/portfolio")),
       fetchJSON(core("/api/paper/report")),
       fetchJSON(core("/api/paper/rules")),
       fetchJSON(core("/api/paper/orders?limit=20&offset=0")),
-      fetchJSON(core("/api/paper/audit?limit=40&offset=0")),
+      fetchJSON(core("/api/paper/timeline")),
     ]);
 
   const session = sessionPayload.session;
@@ -226,8 +372,9 @@ async function refreshDashboard() {
   const report = reportPayload.report;
   const rules = rulesPayload.rules;
   const orders = ordersPayload.orders || [];
-  const events = auditPayload.events || [];
+  const timeline = timelinePayload.timeline || [];
 
+  dashboardState.currentSessionId = session.id || "";
   elements.sessionStatus.textContent = session.status;
   elements.sessionId.textContent = session.id || "-";
   elements.sessionLastEvent.textContent = `Last event: ${formatTime(session.last_event_at)}`;
@@ -244,11 +391,11 @@ async function refreshDashboard() {
   ]);
 
   setStats(elements.reportStats, [
-    { label: "Filled Orders", value: String(report.filled_orders) },
-    { label: "Rejected Signals", value: String(report.rejected_signals) },
-    { label: "Fees Paid", value: currency(report.fees_paid) },
-    { label: "Slippage Cost", value: currency(report.slippage_cost) },
-    { label: "Max Drawdown", value: currency(report.max_drawdown) },
+    { label: "Filled Orders", value: String(report.filled_orders || 0) },
+    { label: "Rejected Signals", value: String(report.rejected_signals || 0) },
+    { label: "Fees Paid", value: currency(report.fees_paid || 0) },
+    { label: "Slippage Cost", value: currency(report.slippage_cost || 0) },
+    { label: "Max Drawdown", value: currency(report.max_drawdown || 0) },
   ]);
 
   setStats(elements.rulesStats, [
@@ -267,9 +414,84 @@ async function refreshDashboard() {
     },
   ]);
 
+  renderCurrentRiskStats(report, rules, portfolio);
+  renderTimeline(elements.currentTimelineChart, elements.currentTimelineLegend, timeline, report);
   renderPositions(portfolio.positions || []);
   renderOrders(orders);
-  renderAudit(events);
+}
+
+async function refreshSessionHistory() {
+  const payload = await fetchJSON(core(`/api/paper/sessions?${buildSessionsQuery()}`));
+  const sessions = payload.sessions || [];
+  dashboardState.latestSessions = sessions;
+
+  const selectedVisible = sessions.some(
+    (session) => session.session_id === dashboardState.selectedSessionId,
+  );
+  if (!selectedVisible) {
+    const currentSession = sessions.find(
+      (session) => session.session_id === dashboardState.currentSessionId,
+    );
+    dashboardState.selectedSessionId =
+      currentSession?.session_id || sessions[0]?.session_id || "";
+  }
+
+  renderSessionHistory(sessions);
+}
+
+async function refreshSelectedSection() {
+  if (!dashboardState.selectedSessionId) {
+    renderSelectedPlaceholder();
+    return;
+  }
+
+  const sessionID = encodeURIComponent(dashboardState.selectedSessionId);
+  const [reportPayload, auditPayload, timelinePayload] = await Promise.all([
+    fetchJSON(core(`/api/paper/report?session_id=${sessionID}`)),
+    fetchJSON(core(`/api/paper/audit?session_id=${sessionID}&limit=40&offset=0`)),
+    fetchJSON(core(`/api/paper/timeline?session_id=${sessionID}`)),
+  ]);
+
+  const report = reportPayload.report;
+  const audit = auditPayload.events || [];
+  const timeline = timelinePayload.timeline || [];
+
+  renderSelectedSession(report);
+  renderSelectedReport(report);
+  renderAudit(audit);
+  renderTimeline(elements.selectedTimelineChart, elements.selectedTimelineLegend, timeline, report);
+}
+
+async function refreshDashboard() {
+  await refreshCurrentSection();
+  await refreshSessionHistory();
+  await refreshSelectedSection();
+}
+
+function connectTimelineStream() {
+  if (dashboardState.timelineStream) {
+    dashboardState.timelineStream.close();
+  }
+
+  const source = new EventSource(core("/api/paper/timeline/stream"));
+  dashboardState.timelineStream = source;
+
+  source.addEventListener("timeline", async () => {
+    try {
+      await refreshCurrentSection();
+    } catch (error) {
+      showToast(error.message, true);
+    }
+  });
+
+  source.onerror = () => {
+    source.close();
+    window.setTimeout(() => {
+      if (dashboardState.timelineStream === source) {
+        connectTimelineStream();
+      }
+    }, 1500);
+  };
 }
 
 async function hydrateScenarioPickers() {
@@ -364,6 +586,18 @@ async function handleAction(action) {
 }
 
 document.addEventListener("click", async (event) => {
+  const sessionCard = event.target.closest("[data-session-id]");
+  if (sessionCard) {
+    dashboardState.selectedSessionId = sessionCard.dataset.sessionId;
+    renderSessionHistory(dashboardState.latestSessions);
+    try {
+      await refreshSelectedSection();
+    } catch (error) {
+      showToast(error.message, true);
+    }
+    return;
+  }
+
   const button = event.target.closest("[data-action]");
   if (!button) {
     return;
@@ -383,22 +617,35 @@ elements.strategyScenario.addEventListener("change", async () => {
   await loadStrategySignals();
 });
 
+elements.sessionSearch.addEventListener("input", async (event) => {
+  dashboardState.sessionSearch = event.target.value.trim();
+  try {
+    await refreshSessionHistory();
+    await refreshSelectedSection();
+  } catch (error) {
+    showToast(error.message, true);
+  }
+});
+
+elements.sessionStatusFilter.addEventListener("change", async (event) => {
+  dashboardState.sessionStatus = event.target.value;
+  try {
+    await refreshSessionHistory();
+    await refreshSelectedSection();
+  } catch (error) {
+    showToast(error.message, true);
+  }
+});
+
 async function boot() {
   try {
     await hydrateScenarioPickers();
     await refreshDashboard();
+    connectTimelineStream();
     showToast("Dashboard ready.");
   } catch (error) {
     showToast(error.message, true);
   }
-
-  window.setInterval(async () => {
-    try {
-      await refreshDashboard();
-    } catch (error) {
-      showToast(error.message, true);
-    }
-  }, 4000);
 }
 
 boot();

@@ -3,8 +3,11 @@ package server_test
 import (
 	"bytes"
 	"encoding/json"
+	"errors"
+	"io"
 	"net/http"
 	"net/http/httptest"
+	"strings"
 	"testing"
 
 	"crypto_simulator/core_trading/internal/papertrading"
@@ -425,6 +428,204 @@ func TestNewRouterPaperAuditAndReportEndpoints(t *testing.T) {
 	}
 	if reportPayload.Report.UnrealizedPnL != 50 {
 		t.Fatalf("expected unrealized pnl 50, got %v", reportPayload.Report.UnrealizedPnL)
+	}
+}
+
+func TestNewRouterPaperSessionsEndpoint(t *testing.T) {
+	t.Parallel()
+
+	router := newTestRouter(t, 1000)
+	postAnyJSON(t, router, "/api/paper/session/stop", `{}`)
+
+	req := httptest.NewRequest(http.MethodGet, "/api/paper/sessions?limit=10&offset=0", nil)
+	recorder := httptest.NewRecorder()
+	router.ServeHTTP(recorder, req)
+
+	if recorder.Code != http.StatusOK {
+		t.Fatalf("expected status %d, got %d", http.StatusOK, recorder.Code)
+	}
+
+	var payload struct {
+		Sessions []papertrading.SessionHistoryEntry `json:"sessions"`
+	}
+	if err := json.Unmarshal(recorder.Body.Bytes(), &payload); err != nil {
+		t.Fatalf("failed to decode sessions payload: %v", err)
+	}
+	if len(payload.Sessions) != 1 {
+		t.Fatalf("expected 1 session entry, got %d", len(payload.Sessions))
+	}
+	if payload.Sessions[0].Status != papertrading.SessionStatusStopped {
+		t.Fatalf("expected stopped session, got %q", payload.Sessions[0].Status)
+	}
+}
+
+func TestNewRouterPaperSessionsEndpointSupportsFiltersAndPagination(t *testing.T) {
+	t.Parallel()
+
+	router := newTestRouter(t, 1000)
+	postAnyJSON(t, router, "/api/paper/session/start", `{"session_id":"alpha-session"}`)
+	postAnyJSON(t, router, "/api/paper/session/stop", `{}`)
+
+	req := httptest.NewRequest(http.MethodGet, "/api/paper/sessions?q=alpha&status=stopped&limit=10&offset=0", nil)
+	recorder := httptest.NewRecorder()
+	router.ServeHTTP(recorder, req)
+
+	if recorder.Code != http.StatusOK {
+		t.Fatalf("expected status %d, got %d", http.StatusOK, recorder.Code)
+	}
+
+	var payload struct {
+		Sessions []papertrading.SessionHistoryEntry `json:"sessions"`
+	}
+	if err := json.Unmarshal(recorder.Body.Bytes(), &payload); err != nil {
+		t.Fatalf("failed to decode sessions payload: %v", err)
+	}
+	if len(payload.Sessions) != 1 || payload.Sessions[0].SessionID != "alpha-session" {
+		t.Fatalf("unexpected filtered sessions payload %+v", payload.Sessions)
+	}
+
+	pagedReq := httptest.NewRequest(http.MethodGet, "/api/paper/sessions?limit=10&offset=1", nil)
+	pagedRecorder := httptest.NewRecorder()
+	router.ServeHTTP(pagedRecorder, pagedReq)
+
+	var pagedPayload struct {
+		Sessions []papertrading.SessionHistoryEntry `json:"sessions"`
+	}
+	if err := json.Unmarshal(pagedRecorder.Body.Bytes(), &pagedPayload); err != nil {
+		t.Fatalf("failed to decode paged sessions payload: %v", err)
+	}
+	if len(pagedPayload.Sessions) != 0 {
+		t.Fatalf("expected empty paged sessions payload, got %+v", pagedPayload.Sessions)
+	}
+}
+
+func TestNewRouterPaperSessionsRejectsInvalidStatus(t *testing.T) {
+	t.Parallel()
+
+	router := newTestRouter(t, 1000)
+	req := httptest.NewRequest(http.MethodGet, "/api/paper/sessions?status=paused", nil)
+	recorder := httptest.NewRecorder()
+	router.ServeHTTP(recorder, req)
+
+	if recorder.Code != http.StatusBadRequest {
+		t.Fatalf("expected status %d, got %d", http.StatusBadRequest, recorder.Code)
+	}
+}
+
+func TestNewRouterPaperAuditAndReportEndpointsSupportSessionID(t *testing.T) {
+	t.Parallel()
+
+	router := newTestRouter(t, 1000)
+	postJSON(t, router, "/api/paper/orders", `{"symbol":"BTCUSDT","side":"buy","quantity":1,"price":100}`)
+
+	sessionReq := httptest.NewRequest(http.MethodGet, "/api/paper/session", nil)
+	sessionRecorder := httptest.NewRecorder()
+	router.ServeHTTP(sessionRecorder, sessionReq)
+
+	var sessionPayload struct {
+		Session struct {
+			ID string `json:"id"`
+		} `json:"session"`
+	}
+	if err := json.Unmarshal(sessionRecorder.Body.Bytes(), &sessionPayload); err != nil {
+		t.Fatalf("failed to decode session payload: %v", err)
+	}
+
+	reportReq := httptest.NewRequest(http.MethodGet, "/api/paper/report?session_id="+sessionPayload.Session.ID, nil)
+	reportRecorder := httptest.NewRecorder()
+	router.ServeHTTP(reportRecorder, reportReq)
+	if reportRecorder.Code != http.StatusOK {
+		t.Fatalf("expected status %d, got %d", http.StatusOK, reportRecorder.Code)
+	}
+
+	auditReq := httptest.NewRequest(http.MethodGet, "/api/paper/audit?session_id="+sessionPayload.Session.ID+"&limit=10&offset=0", nil)
+	auditRecorder := httptest.NewRecorder()
+	router.ServeHTTP(auditRecorder, auditReq)
+	if auditRecorder.Code != http.StatusOK {
+		t.Fatalf("expected status %d, got %d", http.StatusOK, auditRecorder.Code)
+	}
+}
+
+func TestNewRouterPaperSessionScopedEndpointsReturnNotFound(t *testing.T) {
+	t.Parallel()
+
+	router := newTestRouter(t, 1000)
+
+	for _, path := range []string{
+		"/api/paper/report?session_id=missing",
+		"/api/paper/audit?session_id=missing&limit=10&offset=0",
+		"/api/paper/timeline?session_id=missing",
+	} {
+		req := httptest.NewRequest(http.MethodGet, path, nil)
+		recorder := httptest.NewRecorder()
+		router.ServeHTTP(recorder, req)
+		if recorder.Code != http.StatusNotFound {
+			t.Fatalf("expected status %d for %s, got %d", http.StatusNotFound, path, recorder.Code)
+		}
+	}
+}
+
+func TestNewRouterPaperTimelineEndpoint(t *testing.T) {
+	t.Parallel()
+
+	router := newTestRouter(t, 1000)
+	postJSON(t, router, "/api/paper/orders", `{"symbol":"BTCUSDT","side":"buy","quantity":1,"price":100}`)
+	postAnyJSON(t, router, "/internal/market/prices", `{"ticks":[{"symbol":"BTCUSDT","price":150,"source":"mock-replay","timestamp":"2026-04-17T00:00:00Z"}]}`)
+
+	req := httptest.NewRequest(http.MethodGet, "/api/paper/timeline", nil)
+	recorder := httptest.NewRecorder()
+	router.ServeHTTP(recorder, req)
+
+	if recorder.Code != http.StatusOK {
+		t.Fatalf("expected status %d, got %d", http.StatusOK, recorder.Code)
+	}
+
+	var payload struct {
+		Timeline []papertrading.SessionTimelinePoint `json:"timeline"`
+	}
+	if err := json.Unmarshal(recorder.Body.Bytes(), &payload); err != nil {
+		t.Fatalf("failed to decode timeline payload: %v", err)
+	}
+	if len(payload.Timeline) < 3 {
+		t.Fatalf("expected at least 3 timeline points, got %d", len(payload.Timeline))
+	}
+}
+
+func TestNewRouterPaperTimelineStreamEndpoint(t *testing.T) {
+	t.Parallel()
+
+	router := newTestRouter(t, 1000)
+	server := httptest.NewServer(router)
+	defer server.Close()
+
+	streamReq, err := http.NewRequest(http.MethodGet, server.URL+"/api/paper/timeline/stream", nil)
+	if err != nil {
+		t.Fatalf("failed to build request: %v", err)
+	}
+
+	resp, err := (&http.Client{}).Do(streamReq)
+	if err != nil {
+		t.Fatalf("failed to open stream: %v", err)
+	}
+	defer resp.Body.Close()
+
+	postJSON(t, router, "/api/paper/orders", `{"symbol":"BTCUSDT","side":"buy","quantity":1,"price":100}`)
+
+	buffer := make([]byte, 512)
+	n, readErr := resp.Body.Read(buffer)
+	if readErr != nil && !errors.Is(readErr, io.EOF) {
+		t.Fatalf("failed to read stream: %v", readErr)
+	}
+	body := string(buffer[:n])
+	if !strings.Contains(body, "event: timeline") {
+		n, readErr = resp.Body.Read(buffer)
+		if readErr != nil && !errors.Is(readErr, io.EOF) {
+			t.Fatalf("failed to read second stream chunk: %v", readErr)
+		}
+		body += string(buffer[:n])
+	}
+	if !strings.Contains(body, "event: timeline") {
+		t.Fatalf("expected timeline event in stream, got %q", body)
 	}
 }
 

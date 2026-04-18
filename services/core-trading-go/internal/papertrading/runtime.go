@@ -33,6 +33,7 @@ func (e *Engine) bootstrapRuntimeState(now time.Time) {
 	e.symbolStats = make(map[string]sessionSymbolMetrics)
 	e.peakEquity = e.initialBalance
 	e.maxDrawdown = 0
+	e.timeline = nil
 	e.lastOrderAt = make(map[string]time.Time)
 	e.processedSignals = make(map[string]struct{})
 
@@ -54,6 +55,7 @@ func (e *Engine) bootstrapRuntimeState(now time.Time) {
 	}
 
 	e.appendAuditLocked("session_started", "simulation session started", "", now, nil)
+	e.appendTimelinePointLocked(now, "session_started")
 }
 
 func (e *Engine) restoreRuntimeState(state PersistentState, now time.Time) {
@@ -89,6 +91,7 @@ func (e *Engine) restoreRuntimeState(state PersistentState, now time.Time) {
 		}
 	}
 	e.maxDrawdown = report.MaxDrawdown
+	e.timeline = cloneTimelinePoints(report.Timeline)
 }
 
 func (e *Engine) buildPersistentStateLocked() PersistentState {
@@ -120,6 +123,67 @@ func (e *Engine) SessionSummary() SimulationSession {
 	return e.currentSession
 }
 
+func (e *Engine) SessionHistory(filter SessionHistoryFilter) ([]SessionHistoryEntry, error) {
+	e.mu.Lock()
+	defer e.mu.Unlock()
+
+	if filter.Limit <= 0 {
+		filter.Limit = 20
+	}
+	if filter.Offset < 0 {
+		filter.Offset = 0
+	}
+
+	if e.store == nil {
+		return paginateSessionHistoryEntries(
+			filterSessionHistoryEntries([]SessionHistoryEntry{e.buildSessionHistoryEntryLocked()}, filter),
+			filter,
+		), nil
+	}
+
+	entries, err := e.store.ListSessions(e.account.ID, filter)
+	if err != nil {
+		return nil, err
+	}
+	if len(entries) == 0 {
+		return paginateSessionHistoryEntries(
+			filterSessionHistoryEntries([]SessionHistoryEntry{e.buildSessionHistoryEntryLocked()}, filter),
+			filter,
+		), nil
+	}
+
+	return entries, nil
+}
+
+func filterSessionHistoryEntries(entries []SessionHistoryEntry, filter SessionHistoryFilter) []SessionHistoryEntry {
+	filtered := make([]SessionHistoryEntry, 0, len(entries))
+	query := strings.TrimSpace(strings.ToLower(filter.Query))
+	for _, entry := range entries {
+		if filter.Status != "" && entry.Status != filter.Status {
+			continue
+		}
+		if query != "" && !strings.Contains(strings.ToLower(entry.SessionID), query) {
+			continue
+		}
+		filtered = append(filtered, entry)
+	}
+
+	return filtered
+}
+
+func paginateSessionHistoryEntries(entries []SessionHistoryEntry, filter SessionHistoryFilter) []SessionHistoryEntry {
+	if filter.Offset >= len(entries) {
+		return []SessionHistoryEntry{}
+	}
+
+	end := filter.Offset + filter.Limit
+	if end > len(entries) {
+		end = len(entries)
+	}
+
+	return slices.Clone(entries[filter.Offset:end])
+}
+
 func (e *Engine) StartSession(sessionID string) (SimulationSession, error) {
 	e.mu.Lock()
 	defer e.mu.Unlock()
@@ -140,6 +204,7 @@ func (e *Engine) StartSession(sessionID string) (SimulationSession, error) {
 	e.appendAuditLocked("session_started", "simulation session started", "", now, map[string]any{
 		"source": "manual-start",
 	})
+	e.appendTimelinePointLocked(now, "session_started")
 
 	if err := e.persistLocked(); err != nil {
 		e.restoreLockedState(previousState)
@@ -172,6 +237,7 @@ func (e *Engine) ResetSession() (SimulationSession, error) {
 	e.appendAuditLocked("session_reset", "simulation session reset", "", now, map[string]any{
 		"reset_count": resetCount,
 	})
+	e.appendTimelinePointLocked(now, "session_reset")
 
 	if err := e.persistLocked(); err != nil {
 		e.restoreLockedState(previousState)
@@ -195,6 +261,7 @@ func (e *Engine) StopSession() (SimulationSession, error) {
 	e.currentSession.StoppedAt = &now
 	e.touchSessionLocked(now)
 	e.appendAuditLocked("session_stopped", "simulation session stopped", "", now, nil)
+	e.appendTimelinePointLocked(now, "session_stopped")
 
 	if err := e.persistLocked(); err != nil {
 		e.restoreLockedState(previousState)
@@ -231,6 +298,86 @@ func (e *Engine) CurrentReport() SessionReport {
 	defer e.mu.Unlock()
 
 	return e.buildSessionReportLocked()
+}
+
+func (e *Engine) ReportBySession(sessionID string) (SessionReport, error) {
+	e.mu.Lock()
+	defer e.mu.Unlock()
+
+	if sessionID == "" || sessionID == e.currentSession.ID || e.store == nil {
+		if sessionID != "" && sessionID != e.currentSession.ID && e.store == nil {
+			return SessionReport{}, ErrSessionNotFound
+		}
+		return e.buildSessionReportLocked(), nil
+	}
+
+	report, found, err := e.store.LoadSessionReport(e.account.ID, sessionID)
+	if err != nil {
+		return SessionReport{}, err
+	}
+	if !found {
+		return SessionReport{}, ErrSessionNotFound
+	}
+
+	return report, nil
+}
+
+func (e *Engine) TimelineBySession(sessionID string) ([]SessionTimelinePoint, error) {
+	e.mu.Lock()
+	defer e.mu.Unlock()
+
+	if sessionID == "" || sessionID == e.currentSession.ID || e.store == nil {
+		if sessionID != "" && sessionID != e.currentSession.ID && e.store == nil {
+			return nil, ErrSessionNotFound
+		}
+		return cloneTimelinePoints(e.timeline), nil
+	}
+
+	points, found, err := e.store.LoadSessionTimeline(e.account.ID, sessionID)
+	if err != nil {
+		return nil, err
+	}
+	if !found {
+		return nil, ErrSessionNotFound
+	}
+
+	return points, nil
+}
+
+func (e *Engine) AuditTrailBySession(sessionID string, limit int, offset int) ([]AuditEvent, error) {
+	e.mu.Lock()
+	defer e.mu.Unlock()
+
+	if sessionID == "" || sessionID == e.currentSession.ID || e.store == nil {
+		if sessionID != "" && sessionID != e.currentSession.ID && e.store == nil {
+			return nil, ErrSessionNotFound
+		}
+		if limit <= 0 {
+			limit = 100
+		}
+		if offset < 0 {
+			offset = 0
+		}
+		if offset >= len(e.auditEvents) {
+			return []AuditEvent{}, nil
+		}
+
+		end := offset + limit
+		if end > len(e.auditEvents) {
+			end = len(e.auditEvents)
+		}
+		return cloneAuditEvents(e.auditEvents[offset:end]), nil
+	}
+
+	events, found, err := e.store.LoadSessionAudit(e.account.ID, sessionID, limit, offset)
+	if err != nil {
+		return nil, err
+	}
+	if !found {
+		return nil, ErrSessionNotFound
+	}
+
+	return events, nil
 }
 
 func (e *Engine) ProcessSignal(signal SignalV1) (SignalExecution, error) {
@@ -335,6 +482,7 @@ func (e *Engine) placeMarketOrderLocked(request PlaceOrderRequest, extraDetails 
 	e.orders = append(e.orders, order)
 	e.noteFilledOrderLocked(order, extraDetails)
 	e.updateDrawdownLocked()
+	e.appendTimelinePointLocked(order.ExecutedAt, "order_filled")
 
 	if err := e.persistLocked(); err != nil {
 		e.restoreLockedState(previousState)
@@ -508,6 +656,46 @@ func (e *Engine) updateDrawdownLocked() {
 	}
 }
 
+func (e *Engine) buildSessionHistoryEntryLocked() SessionHistoryEntry {
+	report := e.buildSessionReportLocked()
+	return SessionHistoryEntry{
+		SessionID:       e.currentSession.ID,
+		Status:          e.currentSession.Status,
+		StartedAt:       e.currentSession.StartedAt,
+		StoppedAt:       e.currentSession.StoppedAt,
+		LastEventAt:     e.currentSession.LastEventAt,
+		ResetCount:      e.currentSession.ResetCount,
+		FilledOrders:    report.FilledOrders,
+		RejectedSignals: report.RejectedSignals,
+		RealizedPnL:     report.RealizedPnL,
+		TotalPnL:        report.TotalPnL,
+		MaxDrawdown:     report.MaxDrawdown,
+	}
+}
+
+func (e *Engine) appendTimelinePointLocked(timestamp time.Time, eventType string) {
+	if timestamp.IsZero() {
+		timestamp = time.Now().UTC()
+	}
+
+	summary := e.buildPortfolioSummary()
+	point := SessionTimelinePoint{
+		Timestamp:     timestamp,
+		Equity:        summary.TotalEquity,
+		CashBalance:   summary.CashBalance,
+		UnrealizedPnL: summary.UnrealizedPnL,
+		Drawdown:      e.peakEquity - summary.TotalEquity,
+		EventType:     eventType,
+	}
+	e.timeline = append(e.timeline, point)
+	for _, subscriber := range e.subscribers {
+		select {
+		case subscriber <- point:
+		default:
+		}
+	}
+}
+
 func (e *Engine) buildSessionReportLocked() SessionReport {
 	summary := e.buildPortfolioSummary()
 	symbols := make([]SymbolReport, 0, len(e.symbolStats))
@@ -537,6 +725,7 @@ func (e *Engine) buildSessionReportLocked() SessionReport {
 		TotalPnL:        summary.RealizedPnL + summary.UnrealizedPnL,
 		MaxDrawdown:     e.maxDrawdown,
 		Symbols:         symbols,
+		Timeline:        cloneTimelinePoints(e.timeline),
 	}
 }
 
@@ -559,6 +748,7 @@ func (e *Engine) resetTradingStateLocked() {
 	e.symbolStats = make(map[string]sessionSymbolMetrics)
 	e.peakEquity = e.initialBalance
 	e.maxDrawdown = 0
+	e.timeline = nil
 	e.lastOrderAt = make(map[string]time.Time)
 	e.processedSignals = make(map[string]struct{})
 }

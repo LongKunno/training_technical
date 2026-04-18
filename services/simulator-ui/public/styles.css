@@ -146,6 +146,10 @@ body {
   grid-template-columns: repeat(3, minmax(0, 1fr));
 }
 
+.analytics-grid {
+  align-items: start;
+}
+
 .data-grid {
   grid-template-columns: repeat(2, minmax(0, 1fr));
 }
@@ -262,6 +266,102 @@ button.danger {
 
 .table-wrap {
   overflow: auto;
+}
+
+.session-history {
+  display: grid;
+  gap: 10px;
+  max-height: 280px;
+  overflow: auto;
+}
+
+.session-toolbar {
+  display: grid;
+  grid-template-columns: 1.6fr 0.8fr;
+  gap: 10px;
+  margin-bottom: 12px;
+}
+
+.session-card {
+  border: 1px solid rgba(255, 255, 255, 0.08);
+  border-radius: 18px;
+  padding: 14px;
+  background: rgba(255, 255, 255, 0.04);
+  cursor: pointer;
+}
+
+.session-card.active {
+  border-color: rgba(247, 179, 43, 0.55);
+  box-shadow: inset 0 0 0 1px rgba(247, 179, 43, 0.24);
+}
+
+.session-card header {
+  display: flex;
+  justify-content: space-between;
+  gap: 12px;
+}
+
+.session-card strong {
+  display: block;
+  margin: 6px 0;
+}
+
+.session-card small,
+.timeline-legend {
+  color: var(--muted);
+}
+
+.timeline-chart {
+  position: relative;
+  display: grid;
+  align-items: end;
+  grid-template-columns: repeat(var(--points, 1), minmax(0, 1fr));
+  gap: 6px;
+  min-height: 190px;
+  padding: 12px 0 8px;
+}
+
+.timeline-empty {
+  display: grid;
+  place-items: center;
+  min-height: 150px;
+}
+
+.timeline-column {
+  position: relative;
+  min-height: 150px;
+  display: flex;
+  align-items: end;
+}
+
+.timeline-bar {
+  width: 100%;
+  border-radius: 12px 12px 4px 4px;
+  background: linear-gradient(180deg, var(--accent-2) 0%, rgba(82, 209, 198, 0.18) 100%);
+  min-height: 8px;
+}
+
+.timeline-bar.drawdown {
+  background: linear-gradient(180deg, rgba(242, 95, 92, 0.95) 0%, rgba(242, 95, 92, 0.18) 100%);
+}
+
+.timeline-column::after {
+  content: attr(data-label);
+  position: absolute;
+  left: 50%;
+  bottom: -22px;
+  transform: translateX(-50%);
+  font-size: 0.68rem;
+  color: var(--muted);
+  white-space: nowrap;
+}
+
+.timeline-legend {
+  display: flex;
+  justify-content: space-between;
+  gap: 12px;
+  margin-top: 16px;
+  font-size: 0.82rem;
 }
 
 table {

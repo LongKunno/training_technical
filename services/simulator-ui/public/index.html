@@ -20,12 +20,12 @@
           <p class="eyebrow">Crypto Trading Simulator</p>
           <h1>Simulator Control Deck</h1>
           <p class="lede">
-            Một bảng điều khiển cho paper trading session, market replay, strategy mock và audit feed.
+            Operator view for current-session control, session history review, and live paper-trading timeline.
           </p>
         </div>
         <div class="hero-metrics">
           <div class="metric-card">
-            <span>Session</span>
+            <span>Current Session</span>
             <strong id="session-status">loading</strong>
             <small id="session-id">-</small>
           </div>
@@ -144,11 +144,11 @@
 
       <section class="summary-grid">
         <article class="panel stats-panel">
-          <h2>Portfolio</h2>
+          <h2>Current Portfolio</h2>
           <div class="stat-list" id="portfolio-stats"></div>
         </article>
         <article class="panel stats-panel">
-          <h2>Report</h2>
+          <h2>Current Report</h2>
           <div class="stat-list" id="report-stats"></div>
         </article>
         <article class="panel stats-panel">
@@ -157,10 +157,55 @@
         </article>
       </section>
 
+      <section class="summary-grid analytics-grid">
+        <article class="panel table-panel">
+          <div class="panel-head">
+            <h2>Session History</h2>
+            <span id="sessions-count">0</span>
+          </div>
+          <div class="session-toolbar">
+            <input id="session-search" placeholder="Search session id" />
+            <select id="session-status-filter">
+              <option value="">All</option>
+              <option value="running">Running</option>
+              <option value="stopped">Stopped</option>
+            </select>
+          </div>
+          <div class="session-history" id="session-history"></div>
+        </article>
+
+        <article class="panel stats-panel">
+          <h2>Current Risk</h2>
+          <div class="stat-list" id="risk-stats"></div>
+        </article>
+
+        <article class="panel stats-panel">
+          <h2>Current Timeline</h2>
+          <div class="timeline-chart" id="current-timeline-chart"></div>
+          <div class="timeline-legend" id="current-timeline-legend"></div>
+        </article>
+      </section>
+
+      <section class="summary-grid">
+        <article class="panel stats-panel">
+          <h2>Selected Session</h2>
+          <div class="stat-list" id="selected-session-stats"></div>
+        </article>
+        <article class="panel stats-panel">
+          <h2>Selected Report</h2>
+          <div class="stat-list" id="selected-report-stats"></div>
+        </article>
+        <article class="panel stats-panel">
+          <h2>Selected Timeline</h2>
+          <div class="timeline-chart" id="selected-timeline-chart"></div>
+          <div class="timeline-legend" id="selected-timeline-legend"></div>
+        </article>
+      </section>
+
       <section class="data-grid">
         <article class="panel table-panel">
           <div class="panel-head">
-            <h2>Positions</h2>
+            <h2>Current Positions</h2>
             <span id="positions-count">0</span>
           </div>
           <div class="table-wrap">
@@ -181,7 +226,7 @@
 
         <article class="panel table-panel">
           <div class="panel-head">
-            <h2>Orders</h2>
+            <h2>Current Orders</h2>
             <span id="orders-count">0</span>
           </div>
           <div class="table-wrap">
@@ -205,10 +250,10 @@
       <section class="data-grid">
         <article class="panel table-panel">
           <div class="panel-head">
-            <h2>Audit Feed</h2>
-            <span id="audit-count">0</span>
+            <h2>Selected Audit Feed</h2>
+            <span id="selected-audit-count">0</span>
           </div>
-          <div class="audit-feed" id="audit-feed"></div>
+          <div class="audit-feed" id="selected-audit-feed"></div>
         </article>
 
         <article class="panel table-panel">

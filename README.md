@@ -15,7 +15,7 @@ Repo này đang đi theo hướng `simulator-first`: ưu tiên `paper trading`, 
   - HTTP publish sang Go internal ingest
   - Kafka publish tùy chọn cho `PriceTickV1`
 - `services/simulator-ui`
-  - dashboard nội bộ v1 để điều khiển session, market replay, strategy publish, audit feed và report
+  - dashboard nội bộ v1 để điều khiển current session, market replay, strategy publish, session history, selected-session audit/timeline và report
   - reverse proxy sang Go/Python services qua `/core/*` và `/data/*`
 - `docker-compose.yml`
   - `postgres`, `redis`, `kafka`, `migrations`, `core_trading`, `data_pipeline`, `simulator_ui`, `smoke_runner`
@@ -55,6 +55,7 @@ Session paper trading:
 ```bash
 curl http://localhost:18080/api/paper/rules
 curl http://localhost:18080/api/paper/session
+curl 'http://localhost:18080/api/paper/sessions?limit=20&offset=0'
 curl -X POST http://localhost:18080/api/paper/session/start \
   -H 'Content-Type: application/json' \
   -d '{"session_id":"manual-session"}'
@@ -106,6 +107,9 @@ Audit và report:
 ```bash
 curl 'http://localhost:18080/api/paper/audit?limit=20&offset=0'
 curl http://localhost:18080/api/paper/report
+curl 'http://localhost:18080/api/paper/report?session_id=manual-session'
+curl 'http://localhost:18080/api/paper/audit?session_id=manual-session&limit=20&offset=0'
+curl 'http://localhost:18080/api/paper/timeline?session_id=manual-session'
 ```
 
 ## Verify trong Docker
@@ -125,7 +129,7 @@ make smoke-restore
 Smoke flow hiện tại verify chuỗi:
 
 ```text
-UI root -> start session -> publish strategy signal -> publish mock price -> portfolio -> sell signal -> audit/report -> stop session
+UI root -> start session A -> publish strategy signal -> publish mock price -> portfolio -> sell signal -> report/audit/timeline -> stop A -> start B -> sessions/history lookup -> session-scoped reads -> stop B
 ```
 
 ## Cleanup

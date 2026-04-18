@@ -118,6 +118,36 @@ type SimulationSession struct {
 	LastEventAt time.Time     `json:"last_event_at"`
 }
 
+type SessionHistoryEntry struct {
+	SessionID       string        `json:"session_id"`
+	Status          SessionStatus `json:"status"`
+	StartedAt       time.Time     `json:"started_at"`
+	StoppedAt       *time.Time    `json:"stopped_at,omitempty"`
+	LastEventAt     time.Time     `json:"last_event_at"`
+	ResetCount      int           `json:"reset_count"`
+	FilledOrders    int           `json:"filled_orders"`
+	RejectedSignals int           `json:"rejected_signals"`
+	RealizedPnL     float64       `json:"realized_pnl"`
+	TotalPnL        float64       `json:"total_pnl"`
+	MaxDrawdown     float64       `json:"max_drawdown"`
+}
+
+type SessionHistoryFilter struct {
+	Query  string
+	Status SessionStatus
+	Limit  int
+	Offset int
+}
+
+type SessionTimelinePoint struct {
+	Timestamp     time.Time `json:"timestamp"`
+	Equity        float64   `json:"equity"`
+	CashBalance   float64   `json:"cash_balance"`
+	UnrealizedPnL float64   `json:"unrealized_pnl"`
+	Drawdown      float64   `json:"drawdown"`
+	EventType     string    `json:"event_type"`
+}
+
 type SignalV1 struct {
 	StrategyID string    `json:"strategy_id"`
 	SignalID   string    `json:"signal_id"`
@@ -155,20 +185,21 @@ type SymbolReport struct {
 }
 
 type SessionReport struct {
-	SessionID       string         `json:"session_id"`
-	Status          SessionStatus  `json:"status"`
-	StartedAt       time.Time      `json:"started_at"`
-	StoppedAt       *time.Time     `json:"stopped_at,omitempty"`
-	ResetCount      int            `json:"reset_count"`
-	FilledOrders    int            `json:"filled_orders"`
-	RejectedSignals int            `json:"rejected_signals"`
-	FeesPaid        float64        `json:"fees_paid"`
-	SlippageCost    float64        `json:"slippage_cost"`
-	RealizedPnL     float64        `json:"realized_pnl"`
-	UnrealizedPnL   float64        `json:"unrealized_pnl"`
-	TotalPnL        float64        `json:"total_pnl"`
-	MaxDrawdown     float64        `json:"max_drawdown"`
-	Symbols         []SymbolReport `json:"symbols"`
+	SessionID       string                 `json:"session_id"`
+	Status          SessionStatus          `json:"status"`
+	StartedAt       time.Time              `json:"started_at"`
+	StoppedAt       *time.Time             `json:"stopped_at,omitempty"`
+	ResetCount      int                    `json:"reset_count"`
+	FilledOrders    int                    `json:"filled_orders"`
+	RejectedSignals int                    `json:"rejected_signals"`
+	FeesPaid        float64                `json:"fees_paid"`
+	SlippageCost    float64                `json:"slippage_cost"`
+	RealizedPnL     float64                `json:"realized_pnl"`
+	UnrealizedPnL   float64                `json:"unrealized_pnl"`
+	TotalPnL        float64                `json:"total_pnl"`
+	MaxDrawdown     float64                `json:"max_drawdown"`
+	Symbols         []SymbolReport         `json:"symbols"`
+	Timeline        []SessionTimelinePoint `json:"timeline,omitempty"`
 }
 
 type PersistentState struct {
@@ -188,4 +219,10 @@ type PersistentState struct {
 type StateStore interface {
 	SaveState(state PersistentState) error
 	LoadState(accountID string) (PersistentState, bool, error)
+	ListSessions(accountID string, filter SessionHistoryFilter) ([]SessionHistoryEntry, error)
+	LoadSessionReport(accountID string, sessionID string) (SessionReport, bool, error)
+	LoadSessionAudit(accountID string, sessionID string, limit int, offset int) ([]AuditEvent, bool, error)
+	LoadSessionTimeline(accountID string, sessionID string) ([]SessionTimelinePoint, bool, error)
 }
+
+type TimelineSubscription <-chan SessionTimelinePoint

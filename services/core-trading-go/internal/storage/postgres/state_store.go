@@ -5,6 +5,7 @@ import (
 	"database/sql"
 	"encoding/json"
 	"errors"
+	"strings"
 	"time"
 
 	"crypto_simulator/core_trading/internal/marketdata"
@@ -308,6 +309,166 @@ func (s *StateStore) SaveState(state papertrading.PersistentState) error {
 	}
 
 	return tx.Commit()
+}
+
+func (s *StateStore) ListSessions(accountID string, filter papertrading.SessionHistoryFilter) ([]papertrading.SessionHistoryEntry, error) {
+	ctx, cancel := context.WithTimeout(context.Background(), queryTimeout)
+	defer cancel()
+
+	if filter.Limit <= 0 {
+		filter.Limit = 20
+	}
+	if filter.Offset < 0 {
+		filter.Offset = 0
+	}
+	statusFilter := strings.TrimSpace(string(filter.Status))
+	queryFilter := strings.TrimSpace(filter.Query)
+
+	rows, err := s.db.QueryContext(ctx, `
+		SELECT session_id, status, started_at, stopped_at, last_event_at, reset_count, report_snapshot
+		FROM paper_sessions
+		WHERE account_id = $1
+		  AND ($2 = '' OR status = $2)
+		  AND ($3 = '' OR session_id ILIKE '%' || $3 || '%')
+		ORDER BY updated_at DESC, started_at DESC
+		LIMIT $4 OFFSET $5
+	`, accountID, statusFilter, queryFilter, filter.Limit, filter.Offset)
+	if err != nil {
+		return nil, err
+	}
+	defer func() {
+		_ = rows.Close()
+	}()
+
+	entries := make([]papertrading.SessionHistoryEntry, 0)
+	for rows.Next() {
+		var (
+			entry     papertrading.SessionHistoryEntry
+			status    string
+			reportRaw []byte
+			report    papertrading.SessionReport
+		)
+		if err := rows.Scan(
+			&entry.SessionID,
+			&status,
+			&entry.StartedAt,
+			&entry.StoppedAt,
+			&entry.LastEventAt,
+			&entry.ResetCount,
+			&reportRaw,
+		); err != nil {
+			return nil, err
+		}
+		entry.Status = papertrading.SessionStatus(status)
+		if len(reportRaw) > 0 {
+			if err := json.Unmarshal(reportRaw, &report); err != nil {
+				return nil, err
+			}
+			entry.FilledOrders = report.FilledOrders
+			entry.RejectedSignals = report.RejectedSignals
+			entry.RealizedPnL = report.RealizedPnL
+			entry.TotalPnL = report.TotalPnL
+			entry.MaxDrawdown = report.MaxDrawdown
+		}
+		entries = append(entries, entry)
+	}
+
+	return entries, rows.Err()
+}
+
+func (s *StateStore) LoadSessionReport(accountID string, sessionID string) (papertrading.SessionReport, bool, error) {
+	ctx, cancel := context.WithTimeout(context.Background(), queryTimeout)
+	defer cancel()
+
+	var raw []byte
+	row := s.db.QueryRowContext(ctx, `
+		SELECT report_snapshot
+		FROM paper_sessions
+		WHERE account_id = $1 AND session_id = $2
+	`, accountID, sessionID)
+
+	if err := row.Scan(&raw); err != nil {
+		if errors.Is(err, sql.ErrNoRows) {
+			return papertrading.SessionReport{}, false, nil
+		}
+		return papertrading.SessionReport{}, false, err
+	}
+
+	var report papertrading.SessionReport
+	if len(raw) > 0 {
+		if err := json.Unmarshal(raw, &report); err != nil {
+			return papertrading.SessionReport{}, false, err
+		}
+	}
+
+	return report, true, nil
+}
+
+func (s *StateStore) LoadSessionAudit(accountID string, sessionID string, limit int, offset int) ([]papertrading.AuditEvent, bool, error) {
+	ctx, cancel := context.WithTimeout(context.Background(), queryTimeout)
+	defer cancel()
+
+	var exists bool
+	if err := s.db.QueryRowContext(ctx, `
+		SELECT EXISTS(
+			SELECT 1 FROM paper_sessions WHERE account_id = $1 AND session_id = $2
+		)
+	`, accountID, sessionID).Scan(&exists); err != nil {
+		return nil, false, err
+	}
+	if !exists {
+		return nil, false, nil
+	}
+
+	rows, err := s.db.QueryContext(ctx, `
+		SELECT id, session_id, event_type, message, COALESCE(symbol, ''), event_timestamp, details
+		FROM paper_audit_events
+		WHERE account_id = $1 AND session_id = $2
+		ORDER BY event_timestamp ASC, id ASC
+		LIMIT $3 OFFSET $4
+	`, accountID, sessionID, limit, offset)
+	if err != nil {
+		return nil, false, err
+	}
+	defer func() {
+		_ = rows.Close()
+	}()
+
+	events := make([]papertrading.AuditEvent, 0)
+	for rows.Next() {
+		var (
+			event      papertrading.AuditEvent
+			detailsRaw []byte
+		)
+		if err := rows.Scan(
+			&event.ID,
+			&event.SessionID,
+			&event.Type,
+			&event.Message,
+			&event.Symbol,
+			&event.Timestamp,
+			&detailsRaw,
+		); err != nil {
+			return nil, false, err
+		}
+		if len(detailsRaw) > 0 {
+			if err := json.Unmarshal(detailsRaw, &event.Details); err != nil {
+				return nil, false, err
+			}
+		}
+		events = append(events, event)
+	}
+
+	return events, true, rows.Err()
+}
+
+func (s *StateStore) LoadSessionTimeline(accountID string, sessionID string) ([]papertrading.SessionTimelinePoint, bool, error) {
+	report, found, err := s.LoadSessionReport(accountID, sessionID)
+	if err != nil || !found {
+		return nil, found, err
+	}
+
+	return report.Timeline, true, nil
 }
 
 func loadOrders(ctx context.Context, tx *sql.Tx, accountID string, state *papertrading.PersistentState) error {

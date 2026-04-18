@@ -3,6 +3,7 @@ package handlers
 import (
 	"encoding/json"
 	"errors"
+	"fmt"
 	"net/http"
 	"strconv"
 
@@ -16,11 +17,16 @@ type paperTradingEngine interface {
 	PositionsSummary() []papertrading.PortfolioPositionSummary
 	RulesSummary() papertrading.RulesSummary
 	SessionSummary() papertrading.SimulationSession
+	SessionHistory(filter papertrading.SessionHistoryFilter) ([]papertrading.SessionHistoryEntry, error)
 	StartSession(sessionID string) (papertrading.SimulationSession, error)
 	ResetSession() (papertrading.SimulationSession, error)
 	StopSession() (papertrading.SimulationSession, error)
 	AuditTrail(limit int, offset int) []papertrading.AuditEvent
+	AuditTrailBySession(sessionID string, limit int, offset int) ([]papertrading.AuditEvent, error)
 	CurrentReport() papertrading.SessionReport
+	ReportBySession(sessionID string) (papertrading.SessionReport, error)
+	TimelineBySession(sessionID string) ([]papertrading.SessionTimelinePoint, error)
+	SubscribeTimeline() (papertrading.TimelineSubscription, func())
 	ListOrders(filter papertrading.OrderFilter) []papertrading.PaperOrder
 	PlaceMarketOrder(request papertrading.PlaceOrderRequest) (papertrading.PaperOrder, error)
 	ProcessSignal(signal papertrading.SignalV1) (papertrading.SignalExecution, error)
@@ -60,12 +66,20 @@ type paperSessionResponse struct {
 	Session papertrading.SimulationSession `json:"session"`
 }
 
+type paperSessionsResponse struct {
+	Sessions []papertrading.SessionHistoryEntry `json:"sessions"`
+}
+
 type paperAuditResponse struct {
 	Events []papertrading.AuditEvent `json:"events"`
 }
 
 type paperReportResponse struct {
 	Report papertrading.SessionReport `json:"report"`
+}
+
+type paperTimelineResponse struct {
+	Timeline []papertrading.SessionTimelinePoint `json:"timeline"`
 }
 
 type priceIngestResponse struct {
@@ -158,6 +172,42 @@ func NewPaperSessionHandler(engine paperTradingEngine) http.HandlerFunc {
 	}
 }
 
+func NewPaperSessionsHandler(engine paperTradingEngine) http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		if r.Method != http.MethodGet {
+			writeMethodNotAllowed(w)
+			return
+		}
+
+		limit, offset, err := parsePagination(r, 20, 100)
+		if err != nil {
+			writePaperTradingError(w, err)
+			return
+		}
+
+		filter := papertrading.SessionHistoryFilter{
+			Query:  r.URL.Query().Get("q"),
+			Limit:  limit,
+			Offset: offset,
+		}
+		if status := r.URL.Query().Get("status"); status != "" {
+			filter.Status = papertrading.SessionStatus(status)
+			if filter.Status != papertrading.SessionStatusRunning && filter.Status != papertrading.SessionStatusStopped {
+				writeAPIError(w, http.StatusBadRequest, "invalid_session_status", "invalid session status")
+				return
+			}
+		}
+
+		sessions, err := engine.SessionHistory(filter)
+		if err != nil {
+			writePaperTradingError(w, err)
+			return
+		}
+
+		writeJSON(w, http.StatusOK, paperSessionsResponse{Sessions: sessions})
+	}
+}
+
 func NewPaperSessionStartHandler(engine paperTradingEngine) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		if r.Method != http.MethodPost {
@@ -238,9 +288,21 @@ func NewPaperAuditHandler(engine paperTradingEngine) http.HandlerFunc {
 			return
 		}
 
-		writeJSON(w, http.StatusOK, paperAuditResponse{
-			Events: engine.AuditTrail(limit, offset),
-		})
+		sessionID := r.URL.Query().Get("session_id")
+		if sessionID == "" {
+			writeJSON(w, http.StatusOK, paperAuditResponse{
+				Events: engine.AuditTrail(limit, offset),
+			})
+			return
+		}
+
+		events, err := engine.AuditTrailBySession(sessionID, limit, offset)
+		if err != nil {
+			writePaperTradingError(w, err)
+			return
+		}
+
+		writeJSON(w, http.StatusOK, paperAuditResponse{Events: events})
 	}
 }
 
@@ -251,9 +313,80 @@ func NewPaperReportHandler(engine paperTradingEngine) http.HandlerFunc {
 			return
 		}
 
-		writeJSON(w, http.StatusOK, paperReportResponse{
-			Report: engine.CurrentReport(),
-		})
+		sessionID := r.URL.Query().Get("session_id")
+		if sessionID == "" {
+			writeJSON(w, http.StatusOK, paperReportResponse{
+				Report: engine.CurrentReport(),
+			})
+			return
+		}
+
+		report, err := engine.ReportBySession(sessionID)
+		if err != nil {
+			writePaperTradingError(w, err)
+			return
+		}
+
+		writeJSON(w, http.StatusOK, paperReportResponse{Report: report})
+	}
+}
+
+func NewPaperTimelineHandler(engine paperTradingEngine) http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		if r.Method != http.MethodGet {
+			writeMethodNotAllowed(w)
+			return
+		}
+
+		points, err := engine.TimelineBySession(r.URL.Query().Get("session_id"))
+		if err != nil {
+			writePaperTradingError(w, err)
+			return
+		}
+
+		writeJSON(w, http.StatusOK, paperTimelineResponse{Timeline: points})
+	}
+}
+
+func NewPaperTimelineStreamHandler(engine paperTradingEngine) http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		if r.Method != http.MethodGet {
+			writeMethodNotAllowed(w)
+			return
+		}
+
+		flusher, ok := w.(http.Flusher)
+		if !ok {
+			writeAPIError(w, http.StatusInternalServerError, "stream_unsupported", "stream unsupported")
+			return
+		}
+
+		w.Header().Set("Content-Type", "text/event-stream")
+		w.Header().Set("Cache-Control", "no-cache")
+		w.Header().Set("Connection", "keep-alive")
+
+		subscription, unsubscribe := engine.SubscribeTimeline()
+		defer unsubscribe()
+
+		fmt.Fprint(w, ": connected\n\n")
+		flusher.Flush()
+
+		for {
+			select {
+			case <-r.Context().Done():
+				return
+			case point, ok := <-subscription:
+				if !ok {
+					return
+				}
+				payload, err := json.Marshal(point)
+				if err != nil {
+					continue
+				}
+				fmt.Fprintf(w, "event: timeline\ndata: %s\n\n", payload)
+				flusher.Flush()
+			}
+		}
 	}
 }
 
@@ -419,6 +552,8 @@ func writePaperTradingError(w http.ResponseWriter, err error) {
 		writeAPIError(w, http.StatusBadRequest, "invalid_quantity", err.Error())
 	case errors.Is(err, papertrading.ErrInvalidPrice):
 		writeAPIError(w, http.StatusBadRequest, "invalid_price", err.Error())
+	case errors.Is(err, papertrading.ErrSessionNotFound):
+		writeAPIError(w, http.StatusNotFound, "session_not_found", err.Error())
 	case errors.Is(err, papertrading.ErrInvalidSymbol):
 		writeAPIError(w, http.StatusBadRequest, "invalid_symbol", err.Error())
 	case errors.Is(err, papertrading.ErrInvalidTimestamp):
