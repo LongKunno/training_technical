@@ -84,6 +84,22 @@ test("sessions route filters historical list without mounting SSE", async ({ pag
       },
     });
   });
+  await mockJsonHandler(page, "**/core/api/paper/audit?*", async (route) => {
+    const sessionId = new URL(route.request().url()).searchParams.get("session_id");
+    await fulfillJson(route, {
+      events: sessionId
+        ? [
+            {
+              id: "evt-selected",
+              message: `Loaded detail for ${sessionId}.`,
+              session_id: sessionId,
+              timestamp: "2026-04-18T09:05:00Z",
+              type: "session_stopped",
+            },
+          ]
+        : [],
+    });
+  });
   await mockJson(page, "**/core/api/paper/timeline?*", { timeline: [] });
 
   await page.goto("/sessions");
@@ -97,6 +113,17 @@ test("sessions route filters historical list without mounting SSE", async ({ pag
 
   await expect(page.getByRole("link", { name: "paper-historical" })).toBeVisible();
   await expect(page.getByRole("link", { name: "paper-live" })).toHaveCount(0);
+  await expect(page).toHaveURL(/\/sessions\?q=paper-historical&selected=paper-historical$/);
+
+  await page.getByRole("link", { name: "Open selected session" }).click();
+  await expect(page).toHaveURL(
+    /\/sessions\/paper-historical\?q=paper-historical&selected=paper-historical$/,
+  );
+  await expect(page.getByText("Loaded detail for paper-historical.")).toBeVisible();
+
+  await page.getByRole("link", { name: "Back to sessions" }).click();
+  await expect(page).toHaveURL(/\/sessions\?q=paper-historical&selected=paper-historical$/);
+  await expect(page.getByRole("link", { name: "paper-historical" })).toBeVisible();
   await expect
     .poll(async () => getEventSourceUrls(page))
     .toEqual([]);

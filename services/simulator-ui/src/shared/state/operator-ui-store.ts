@@ -103,7 +103,7 @@ export const useOperatorUiStore = create<OperatorUiState>()((set, get) => ({
   },
 
   resetSessionHistory: () => {
-    set({ sessionHistory: DEFAULT_SESSION_HISTORY_VIEW });
+    set({ selectedSessionId: null, sessionHistory: DEFAULT_SESSION_HISTORY_VIEW });
   },
 }));
 

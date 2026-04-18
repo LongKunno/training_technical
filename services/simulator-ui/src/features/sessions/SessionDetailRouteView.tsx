@@ -1,5 +1,5 @@
 import { useEffect } from "react";
-import { Link, useParams } from "react-router-dom";
+import { Link, useLocation, useParams } from "react-router-dom";
 
 import { ApiClientError } from "../../shared/api/http";
 import { ChartPanel, createTimelineAreaOption } from "../../shared/charts";
@@ -30,6 +30,8 @@ import {
   getAuditTone,
   getReportMetrics,
   getStatusTone,
+  parseSelectedSessionIdSearchParam,
+  parseSessionHistorySearchParams,
   toTimelineChartPoints,
 } from "./formatters";
 
@@ -74,6 +76,7 @@ function getDetailErrorState(error: unknown) {
 
 export function SessionDetailRouteView() {
   const { sessionId = "" } = useParams();
+  const location = useLocation();
   const sessionHistoryFilter = useOperatorUiStore(selectSessionHistoryFilter);
   const setSelectedSessionId = useOperatorUiStore((state) => state.setSelectedSessionId);
   const detailQuery = useSelectedSessionDetailQuery(sessionId, {
@@ -95,6 +98,12 @@ export function SessionDetailRouteView() {
   const chartOption =
     timeline.length > 0 ? createTimelineAreaOption(toTimelineChartPoints(timeline)) : undefined;
   const detailError = detailQuery.isError ? getDetailErrorState(detailQuery.error) : null;
+  const routeSearchParams = new URLSearchParams(location.search);
+  const routeFilter = parseSessionHistorySearchParams(routeSearchParams);
+  const routeSelectedSessionId = parseSelectedSessionIdSearchParam(routeSearchParams);
+  const backToSessionsPath = location.search
+    ? buildSessionsPath(routeFilter, routeSelectedSessionId ?? sessionId)
+    : buildSessionsPath(sessionHistoryFilter, sessionId);
 
   return (
     <>
@@ -104,7 +113,7 @@ export function SessionDetailRouteView() {
         description="This route is a dedicated immutable surface for report, audit, and timeline data scoped to one saved session. It does not mount current-session SSE or current positions/orders."
         actions={
           <>
-            <Link to={buildSessionsPath(sessionHistoryFilter)} className={linkButtonClassName()}>
+            <Link to={backToSessionsPath} className={linkButtonClassName()}>
               Back to sessions
             </Link>
             <Button
@@ -133,6 +142,9 @@ export function SessionDetailRouteView() {
             <p className="mt-4 text-sm leading-6 text-slate-400">
               Historical detail is intentionally isolated from current-session streaming. Refresh is
               manual and scoped to this selected session only.
+            </p>
+            <p className="mt-3 text-sm leading-6 text-slate-500">
+              Back link preserves the sessions workspace filters and selected preview.
             </p>
           </div>
         }

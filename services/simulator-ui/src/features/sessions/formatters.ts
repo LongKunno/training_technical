@@ -99,8 +99,16 @@ export function parseSessionHistorySearchParams(
   };
 }
 
+export function parseSelectedSessionIdSearchParam(
+  searchParams: URLSearchParams,
+): string | null {
+  const selectedSessionId = searchParams.get("selected")?.trim();
+  return selectedSessionId ? selectedSessionId : null;
+}
+
 export function buildSessionHistorySearchParams(
   filter: SessionHistoryViewFilter,
+  selectedSessionId?: string | null,
 ): URLSearchParams {
   const params = new URLSearchParams();
 
@@ -118,6 +126,10 @@ export function buildSessionHistorySearchParams(
 
   if (filter.offset > DEFAULT_SESSION_FILTER.offset) {
     params.set("offset", String(filter.offset));
+  }
+
+  if (selectedSessionId?.trim()) {
+    params.set("selected", selectedSessionId.trim());
   }
 
   return params;
@@ -233,13 +245,31 @@ export function toTimelineChartPoints(timeline: SessionTimelinePoint[]) {
   }));
 }
 
-export function buildSessionsPath(filter: SessionHistoryViewFilter): string {
-  const queryString = buildSessionHistorySearchParams(filter).toString();
+export function buildSessionsPath(
+  filter: SessionHistoryViewFilter,
+  selectedSessionId?: string | null,
+): string {
+  const queryString = buildSessionHistorySearchParams(filter, selectedSessionId).toString();
   return queryString ? `/sessions?${queryString}` : "/sessions";
 }
 
-export function buildSessionDetailPath(sessionId: string): string {
-  return `/sessions/${encodeURIComponent(sessionId)}`;
+export function buildSessionDetailPath(
+  sessionId: string,
+  options?: {
+    filter?: SessionHistoryViewFilter;
+    selectedSessionId?: string | null;
+  },
+): string {
+  const params =
+    options?.filter || options?.selectedSessionId
+      ? buildSessionHistorySearchParams(
+          options?.filter ?? DEFAULT_SESSION_FILTER,
+          options?.selectedSessionId ?? sessionId,
+        )
+      : undefined;
+  const queryString = params?.toString();
+  const path = `/sessions/${encodeURIComponent(sessionId)}`;
+  return queryString ? `${path}?${queryString}` : path;
 }
 
 export function getPageNumber(filter: SessionHistoryViewFilter): number {

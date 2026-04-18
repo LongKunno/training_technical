@@ -8,6 +8,7 @@ import { Link, useSearchParams } from "react-router-dom";
 
 import { ApiClientError } from "../../shared/api/http";
 import { ChartPanel, createTimelineAreaOption } from "../../shared/charts";
+import { resolveSelectedSessionId } from "../../shared/lib";
 import {
   useCurrentSessionQuery,
   usePaperReportQuery,
@@ -45,6 +46,7 @@ import {
   getPageNumber,
   getPageSummary,
   getStatusTone,
+  parseSelectedSessionIdSearchParam,
   parseSessionHistorySearchParams,
   SESSION_PAGE_SIZE_OPTIONS,
   SESSION_STATUS_OPTIONS,
@@ -90,10 +92,14 @@ function getHistoryErrorMessage(error: unknown): string {
 }
 
 function SessionHistoryCards({
+  buildDetailHref,
+  currentSessionId,
   onSelect,
   selectedSessionId,
   sessions,
 }: {
+  buildDetailHref: (sessionId: string) => string;
+  currentSessionId?: string | null;
   onSelect: (sessionId: string) => void;
   selectedSessionId: string | null;
   sessions: SessionHistoryEntry[];
@@ -134,6 +140,10 @@ function SessionHistoryCards({
                   <Badge tone={getStatusTone(session.status)}>
                     {formatStatusLabel(session.status)}
                   </Badge>
+                  {session.session_id === currentSessionId ? (
+                    <Badge tone="info">Current session</Badge>
+                  ) : null}
+                  {isSelected ? <Badge tone="warning">Preview locked</Badge> : null}
                   <span className="font-['IBM_Plex_Mono'] text-[11px] uppercase tracking-[0.18em] text-slate-500">
                     {formatDateTime(session.last_event_at)}
                   </span>
@@ -153,7 +163,7 @@ function SessionHistoryCards({
                   <div>Max drawdown {formatDrawdown(session.max_drawdown)}</div>
                 </div>
                 <Link
-                  to={buildSessionDetailPath(session.session_id)}
+                  to={buildDetailHref(session.session_id)}
                   className="inline-flex items-center gap-2 text-xs font-medium uppercase tracking-[0.18em] text-sky-200 hover:text-sky-100"
                 >
                   Open detail
@@ -261,6 +271,7 @@ function SessionHistoryFiltersForm({
 export function SessionsRouteView() {
   const [searchParams, setSearchParams] = useSearchParams();
   const parsedFilter = parseSessionHistorySearchParams(searchParams);
+  const selectedSessionSearchParam = parseSelectedSessionIdSearchParam(searchParams);
   const selectedSessionId = useOperatorUiStore(selectSelectedSessionId);
   const storeFilter = useOperatorUiStore(selectSessionHistoryFilter);
   const setSelectedSessionId = useOperatorUiStore((state) => state.setSelectedSessionId);
@@ -269,16 +280,22 @@ export function SessionsRouteView() {
   const setSessionSearch = useOperatorUiStore((state) => state.setSessionSearch);
   const setSessionStatus = useOperatorUiStore((state) => state.setSessionStatus);
   const resetSessionHistory = useOperatorUiStore((state) => state.resetSessionHistory);
-  const syncSelectedSession = useOperatorUiStore((state) => state.syncSelectedSession);
   const currentSessionQuery = useCurrentSessionQuery();
   const historyQuery = useSessionHistoryQuery(parsedFilter);
 
   const sessions = sortSessionHistory(historyQuery.data ?? []);
-
-  const selectedPreviewId =
-    sessions.some((session) => session.session_id === selectedSessionId)
-      ? selectedSessionId
-      : sessions[0]?.session_id ?? null;
+  const selectedPreviewId = resolveSelectedSessionId({
+    currentSessionId: currentSessionQuery.data?.id ?? null,
+    selectedSessionId: selectedSessionSearchParam ?? selectedSessionId,
+    sessions,
+  });
+  const canonicalSelectedPreviewId =
+    !historyQuery.isLoading &&
+    (selectedSessionSearchParam !== null ||
+      currentSessionQuery.isSuccess ||
+      currentSessionQuery.isError)
+      ? selectedPreviewId
+      : selectedSessionSearchParam;
 
   const previewReportQuery = usePaperReportQuery(
     selectedPreviewId ? { session_id: selectedPreviewId } : {},
@@ -300,15 +317,21 @@ export function SessionsRouteView() {
       : undefined;
 
   useEffect(() => {
-    const normalizedSearch = buildSessionHistorySearchParams(parsedFilter).toString();
+    const normalizedSearch = buildSessionHistorySearchParams(
+      parsedFilter,
+      canonicalSelectedPreviewId,
+    ).toString();
     if (searchParams.toString() === normalizedSearch) {
       return;
     }
 
     startTransition(() => {
-      setSearchParams(buildSessionHistorySearchParams(parsedFilter), { replace: true });
+      setSearchParams(
+        buildSessionHistorySearchParams(parsedFilter, canonicalSelectedPreviewId),
+        { replace: true },
+      );
     });
-  }, [parsedFilter, searchParams, setSearchParams]);
+  }, [canonicalSelectedPreviewId, parsedFilter, searchParams, setSearchParams]);
 
   useEffect(() => {
     if (
@@ -338,12 +361,12 @@ export function SessionsRouteView() {
   ]);
 
   useEffect(() => {
-    if (sessions.length === 0) {
+    if (selectedSessionId === selectedPreviewId) {
       return;
     }
 
-    syncSelectedSession(sessions, currentSessionQuery.data?.id ?? null);
-  }, [currentSessionQuery.data?.id, sessions, syncSelectedSession]);
+    setSelectedSessionId(selectedPreviewId);
+  }, [selectedPreviewId, selectedSessionId, setSelectedSessionId]);
 
   function updateFilter(nextFilter: SessionHistoryViewFilter) {
     setStoreFilter(nextFilter, {
@@ -354,14 +377,22 @@ export function SessionsRouteView() {
     });
 
     startTransition(() => {
-      setSearchParams(buildSessionHistorySearchParams(nextFilter));
+      setSearchParams(buildSessionHistorySearchParams(nextFilter, selectedPreviewId));
     });
   }
 
   function handleResetFilters() {
     resetSessionHistory();
+    setSelectedSessionId(null);
     startTransition(() => {
       setSearchParams(new URLSearchParams());
+    });
+  }
+
+  function handleSelectSession(sessionId: string) {
+    setSelectedSessionId(sessionId);
+    startTransition(() => {
+      setSearchParams(buildSessionHistorySearchParams(parsedFilter, sessionId));
     });
   }
 
@@ -382,13 +413,30 @@ export function SessionsRouteView() {
   const hasNextPage = sessions.length === parsedFilter.limit;
   const selectedPreviewSession =
     sessions.find((session) => session.session_id === selectedPreviewId) ?? null;
+  const previewChartTitle = selectedPreviewId
+    ? `Timeline preview for ${selectedPreviewId}`
+    : "Selected session timeline";
+  const previewEmptyTitle = previewReportQuery.isError
+    ? "Selected session preview is unavailable"
+    : "No timeline stored for this session";
+  const previewEmptyDescription = previewReportQuery.isError
+    ? getHistoryErrorMessage(previewReportQuery.error)
+    : previewTimelineQuery.isError
+      ? getHistoryErrorMessage(previewTimelineQuery.error)
+      : "This session does not have a stored timeline snapshot yet. Historical detail can still render report and audit data safely.";
+  const selectedDetailHref = selectedPreviewId
+    ? buildSessionDetailPath(selectedPreviewId, {
+        filter: parsedFilter,
+        selectedSessionId: selectedPreviewId,
+      })
+    : null;
 
   return (
     <>
       <PageHeader
         eyebrow="Session History"
-        title="Review saved sessions without contaminating the live operator view."
-        description="Historical routes stay immutable: search and page through saved sessions here, then open a selected report without letting the live dashboard stream rewrite the context."
+        title="Historical review workspace"
+        description="Search, page, and compare saved sessions here without contaminating the live operator route. The selected preview is encoded into the URL so refresh, back-forward, and detail navigation keep the same reading context."
         actions={
           <>
             <Button
@@ -400,8 +448,8 @@ export function SessionsRouteView() {
             >
               {historyQuery.isFetching ? "Refreshing..." : "Refresh history"}
             </Button>
-            {selectedPreviewId ? (
-              <Link to={buildSessionDetailPath(selectedPreviewId)} className={linkButtonClassName()}>
+            {selectedDetailHref ? (
+              <Link to={selectedDetailHref} className={linkButtonClassName()}>
                 Open selected session
               </Link>
             ) : (
@@ -424,6 +472,9 @@ export function SessionsRouteView() {
               No current-session SSE subscription is mounted here. The only live dependency is a
               one-shot current-session lookup used to choose a default selection when that session
               already exists in history.
+            </p>
+            <p className="mt-3 text-sm leading-6 text-slate-500">
+              Refresh-safe preview: {selectedPreviewId ?? "No session selected yet"}.
             </p>
           </div>
         }
@@ -453,9 +504,16 @@ export function SessionsRouteView() {
             />
           ) : (
             <SessionHistoryCards
+              buildDetailHref={(sessionId) =>
+                buildSessionDetailPath(sessionId, {
+                  filter: parsedFilter,
+                  selectedSessionId: sessionId,
+                })
+              }
+              currentSessionId={currentSessionQuery.data?.id ?? null}
               sessions={sessions}
               selectedSessionId={selectedPreviewId}
-              onSelect={setSelectedSessionId}
+              onSelect={handleSelectSession}
             />
           )}
         </Panel>
@@ -463,12 +521,11 @@ export function SessionsRouteView() {
         <ChartPanel
           tone="soft"
           eyebrow="Preview"
-          title={selectedPreviewId ? `Timeline preview for ${selectedPreviewId}` : "Selected session timeline"}
-          description="Preview reads only the selected historical session. Empty timelines from legacy snapshots resolve to a safe empty state instead of an error."
+          title={previewChartTitle}
+          description="Preview reads only the selected historical session. URL-backed selection means the same context survives refreshes and the dedicated detail route."
           chart={{
-            emptyDescription:
-              "This session does not have a stored timeline snapshot yet. Historical detail can still render report and audit data safely.",
-            emptyTitle: "No timeline stored for this session",
+            emptyDescription: previewEmptyDescription,
+            emptyTitle: previewEmptyTitle,
             height: 320,
             loading: previewReportQuery.isLoading || previewTimelineQuery.isLoading,
             option: previewChartOption,
@@ -481,6 +538,7 @@ export function SessionsRouteView() {
                 </Badge>
                 <span>Total PnL {formatSignedCurrency(selectedPreviewSession.total_pnl)}</span>
                 <span>{formatInteger(selectedPreviewSession.filled_orders)} filled orders</span>
+                <span>Preview encoded in route search params</span>
               </>
             ) : (
               <>
@@ -526,9 +584,11 @@ export function SessionsRouteView() {
               header: "Session ID",
               cell: (row) => (
                 <Link
-                  to={buildSessionDetailPath(row.session_id)}
+                  to={buildSessionDetailPath(row.session_id, {
+                    filter: parsedFilter,
+                    selectedSessionId: row.session_id,
+                  })}
                   className="font-medium text-white hover:text-sky-200"
-                  onMouseEnter={() => setSelectedSessionId(row.session_id)}
                 >
                   {row.session_id}
                 </Link>

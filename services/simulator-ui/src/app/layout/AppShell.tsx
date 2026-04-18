@@ -1,7 +1,8 @@
-import type { ReactNode } from "react";
+import { useEffect, type ReactNode } from "react";
 
 import { Link, NavLink, useLocation } from "react-router-dom";
 
+import { selectSelectedSessionId, useOperatorUiStore } from "../../shared/state";
 import {
   ArrowUpRightIcon,
   Badge,
@@ -58,26 +59,73 @@ const statusCards = [
   },
 ];
 
-function getSectionLabel(pathname: string) {
+function getRouteContext(pathname: string, selectedSessionId: string | null) {
   if (pathname.startsWith("/sessions/")) {
-    return "Session Detail";
+    return {
+      badge: "Read-only detail",
+      description:
+        "Historical report, audit, and timeline stay immutable here. Use the page actions to refresh or jump back to the sessions workspace with the same filter context.",
+      heading: "Selected session detail",
+      sectionLabel: "Session Detail",
+      statusLabel: selectedSessionId ?? "Historical selection",
+    };
   }
 
-  const match = navigation.find((item) => pathname === item.href);
-  return match?.label ?? "Operator Platform";
+  if (pathname === "/sessions") {
+    return {
+      badge: "Historical workspace",
+      description:
+        "Search, page, and compare saved sessions without letting current-session streaming mutate the view. The selected preview is persisted in the route search params.",
+      heading: "Historical review workspace",
+      sectionLabel: "Sessions",
+      statusLabel: selectedSessionId ?? "Preview not locked yet",
+    };
+  }
+
+  if (pathname === "/lab") {
+    return {
+      badge: "Mutating controls",
+      description:
+        "Operator actions, replay tools, and manual signals live here. This route is optimized for changing simulator state, not reading historical snapshots.",
+      heading: "Operator control lab",
+      sectionLabel: "Lab",
+      statusLabel: "Replay + controls",
+    };
+  }
+
+  return {
+    badge: "Current-session SSE",
+    description:
+      "The dashboard remains the only route that mounts the live current-session stream. Use it to monitor equity, risk, and order flow without contaminating historical views.",
+    heading: "Current live operator surface",
+    sectionLabel: "Dashboard",
+    statusLabel: "Live-only monitor",
+  };
 }
 
 export function AppShell({ children }: AppShellProps) {
   const location = useLocation();
-  const sectionLabel = getSectionLabel(location.pathname);
+  const selectedSessionId = useOperatorUiStore(selectSelectedSessionId);
+  const routeContext = getRouteContext(location.pathname, selectedSessionId);
   const dateLabel = new Intl.DateTimeFormat("en-US", {
-    month: "short",
     day: "numeric",
+    month: "short",
     year: "numeric",
   }).format(new Date());
 
+  useEffect(() => {
+    window.scrollTo({ behavior: "auto", left: 0, top: 0 });
+  }, [location.pathname]);
+
   return (
     <div className="relative px-4 py-4 sm:px-6 sm:py-6 xl:px-8 xl:py-8">
+      <a
+        href="#app-main-content"
+        className="focus-ring sr-only fixed left-4 top-4 z-50 rounded-[16px] border border-white/14 bg-slate-950/95 px-4 py-3 text-sm font-medium text-white focus:not-sr-only"
+      >
+        Skip to main content
+      </a>
+
       <div className="mx-auto flex max-w-[1600px] flex-col gap-6 xl:flex-row xl:items-start">
         <aside className="glass-card panel-outline surface-noise relative overflow-hidden rounded-[34px] border px-5 py-6 xl:sticky xl:top-8 xl:w-[320px] xl:px-6 xl:py-7">
           <div className="mb-8 flex items-start justify-between gap-4">
@@ -90,6 +138,9 @@ export function AppShell({ children }: AppShellProps) {
                   Operator Platform
                 </span>
               </Link>
+              <p className="mt-3 max-w-[18rem] text-sm leading-6 text-slate-400">
+                Product shell for current-session monitoring, historical review, and operator controls.
+              </p>
             </div>
             <Badge tone="success">WIP</Badge>
           </div>
@@ -157,16 +208,19 @@ export function AppShell({ children }: AppShellProps) {
             <div className="flex flex-col gap-5 lg:flex-row lg:items-center lg:justify-between">
               <div>
                 <p className="font-['IBM_Plex_Mono'] text-[11px] uppercase tracking-[0.22em] text-slate-500">
-                  {sectionLabel}
+                  {routeContext.sectionLabel}
                 </p>
                 <div className="mt-2 flex flex-wrap items-center gap-3">
                   <h2 className="text-2xl font-medium tracking-[-0.04em] text-white sm:text-3xl">
-                    Product-first operator UX
+                    {routeContext.heading}
                   </h2>
                   <Badge tone="info" leading={<PulseIcon className="size-3" />}>
-                    Current-only SSE
+                    {routeContext.badge}
                   </Badge>
                 </div>
+                <p className="mt-3 max-w-3xl text-sm leading-6 text-slate-400 sm:text-base">
+                  {routeContext.description}
+                </p>
               </div>
 
               <div className="flex flex-wrap items-center gap-3">
@@ -190,11 +244,22 @@ export function AppShell({ children }: AppShellProps) {
                     React shell over Node proxy
                   </div>
                 </div>
+
+                <div className="rounded-[20px] border border-white/8 bg-white/[0.04] px-4 py-3">
+                  <div className="text-xs uppercase tracking-[0.18em] text-slate-500">
+                    Route context
+                  </div>
+                  <div className="mt-1 text-sm font-medium text-white">
+                    {routeContext.statusLabel}
+                  </div>
+                </div>
               </div>
             </div>
           </header>
 
-          <main className="flex flex-1 flex-col gap-6">{children}</main>
+          <main id="app-main-content" tabIndex={-1} className="flex flex-1 flex-col gap-6">
+            {children}
+          </main>
         </div>
       </div>
     </div>
