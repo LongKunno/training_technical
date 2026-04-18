@@ -1,7 +1,6 @@
-import { graphic } from "echarts/core";
 import type { EChartsOption } from "echarts";
 
-import { chartTheme } from "./chartTheme";
+import { chartTheme, createLinearGradient } from "./chartTheme";
 
 export interface TimelinePoint {
   label: string;
@@ -64,7 +63,7 @@ export function createTimelineAreaOption(points: TimelinePoint[]): EChartsOption
           color: chartTheme.palette[0],
         },
         areaStyle: {
-          color: new graphic.LinearGradient(0, 0, 0, 1, [
+          color: createLinearGradient(0, 0, 0, 1, [
             { offset: 0, color: "rgba(126, 203, 255, 0.38)" },
             { offset: 1, color: "rgba(126, 203, 255, 0.02)" },
           ]),
@@ -128,7 +127,7 @@ export function createDistributionBarOption(points: DistributionPoint[]): EChart
         data: points.map((point) => point.value),
         itemStyle: {
           borderRadius: [0, 999, 999, 0],
-          color: new graphic.LinearGradient(1, 0, 0, 0, [
+          color: createLinearGradient(1, 0, 0, 0, [
             { offset: 0, color: "rgba(66, 217, 186, 0.95)" },
             { offset: 1, color: "rgba(126, 203, 255, 0.78)" },
           ]),

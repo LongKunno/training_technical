@@ -7,3 +7,36 @@ export const chartTheme = {
   palette: ["#7ecbff", "#42d9ba", "#f4be51", "#ff8b7a", "#8ba2ff"],
   emphasis: "#eef6ff",
 };
+
+interface GradientStop {
+  offset: number;
+  color: string;
+}
+
+export interface LinearGradientToken {
+  type: "linear";
+  x: number;
+  y: number;
+  x2: number;
+  y2: number;
+  colorStops: GradientStop[];
+  global: false;
+}
+
+export function createLinearGradient(
+  x: number,
+  y: number,
+  x2: number,
+  y2: number,
+  colorStops: GradientStop[],
+): LinearGradientToken {
+  return {
+    colorStops,
+    global: false,
+    type: "linear",
+    x,
+    x2,
+    y,
+    y2,
+  };
+}

@@ -1,7 +1,6 @@
-import { graphic } from "echarts/core";
 import type { EChartsOption } from "echarts";
 
-import { chartTheme } from "../../shared/charts";
+import { chartTheme, createLinearGradient } from "../../shared/charts";
 import type { SessionTimelinePoint } from "../../shared/types";
 import { formatCompactCurrency, formatShortTime } from "./dashboard-formatters";
 
@@ -88,7 +87,7 @@ export function createCurrentTimelineOption(
     series: [
       {
         areaStyle: {
-          color: new graphic.LinearGradient(0, 0, 0, 1, [
+          color: createLinearGradient(0, 0, 0, 1, [
             { offset: 0, color: "rgba(126, 203, 255, 0.38)" },
             { offset: 1, color: "rgba(126, 203, 255, 0.03)" },
           ]),
@@ -117,7 +116,7 @@ export function createCurrentTimelineOption(
         data: seriesPoints.map((point) => Math.max(Number(point.drawdown ?? 0), 0)),
         itemStyle: {
           borderRadius: [999, 999, 0, 0],
-          color: new graphic.LinearGradient(0, 0, 0, 1, [
+          color: createLinearGradient(0, 0, 0, 1, [
             { offset: 0, color: "rgba(244, 190, 81, 0.92)" },
             { offset: 1, color: "rgba(244, 190, 81, 0.22)" },
           ]),
