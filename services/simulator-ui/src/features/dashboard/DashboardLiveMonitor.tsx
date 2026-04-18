@@ -55,6 +55,12 @@ interface RiskPosture {
   trend: string;
 }
 
+interface AttentionItem {
+  title: string;
+  detail: string;
+  tone: "success" | "warning" | "danger" | "info";
+}
+
 const actionLinkClassName =
   "focus-ring inline-flex h-11 items-center justify-center rounded-[18px] border px-5 text-sm font-medium transition";
 
@@ -139,6 +145,114 @@ function renderMetricCard(item: MetricItem) {
       {item.hint ? <div className="mt-2 text-sm leading-6 text-slate-400">{item.hint}</div> : null}
     </div>
   );
+}
+
+function buildOperatorSnapshotSummary(
+  snapshot: CurrentSessionSnapshot | undefined,
+  riskPosture: RiskPosture,
+  currentErrorCopy: EmptyCopy,
+) {
+  if (!snapshot) {
+    return {
+      currentFocus: currentErrorCopy.title,
+      nextMove: "Open Lab and start or reset a paper session before expecting live metrics here.",
+      scope: "Current-session live monitor only",
+    };
+  }
+
+  if (snapshot.positions.length === 0 && snapshot.orders.length === 0) {
+    return {
+      currentFocus: "Session is running but order flow is still quiet.",
+      nextMove:
+        "Use Lab to publish a market scenario or strategy signal so the dashboard can surface fills, exposure, and report drag.",
+      scope: "Watching the first live events",
+    };
+  }
+
+  if (riskPosture.tone === "warning") {
+    return {
+      currentFocus: "Guardrails are close to their configured thresholds.",
+      nextMove:
+        "Check live guardrails and recent fills first. If exposure still climbs, move to Lab to pause or reset the session.",
+      scope: "Risk-first monitoring",
+    };
+  }
+
+  return {
+    currentFocus: "Live session is flowing and guardrails remain inside budget.",
+    nextMove:
+      "Stay on the dashboard for monitoring. Jump to Sessions only when you need immutable historical context.",
+    scope: "Balanced monitoring posture",
+  };
+}
+
+function buildAttentionItems(
+  snapshot: CurrentSessionSnapshot | undefined,
+  riskPosture: RiskPosture,
+  timelineStreamStatus: string,
+  streamError?: Error,
+): AttentionItem[] {
+  if (!snapshot) {
+    return [
+      {
+        title: "Current snapshot missing",
+        detail: "No current-session snapshot is available yet. Start or reset a session from Lab to hydrate the live monitor.",
+        tone: "warning",
+      },
+    ];
+  }
+
+  const items: AttentionItem[] = [];
+
+  if (streamError || timelineStreamStatus === "degraded") {
+    items.push({
+      title: "Live stream degraded",
+      detail: streamError?.message ?? "Current-session SSE is not healthy. Monitor the snapshot badges and refresh if the stream remains unstable.",
+      tone: "danger",
+    });
+  } else {
+    items.push({
+      title: "Live stream healthy",
+      detail: "Current-session SSE is connected. Timeline points will keep mutating this route without touching historical views.",
+      tone: "success",
+    });
+  }
+
+  if (riskPosture.tone === "warning") {
+    items.push({
+      title: "Guardrails need attention",
+      detail: `${riskPosture.detail} ${riskPosture.trend}. Review open exposure and daily loss usage before publishing more flow.`,
+      tone: "warning",
+    });
+  } else if (riskPosture.tone === "accent") {
+    items.push({
+      title: "Exposure leaving the low-utilization zone",
+      detail: `${riskPosture.detail} The dashboard is still healthy, but this is the point where the operator should watch drawdown and fills together.`,
+      tone: "info",
+    });
+  } else {
+    items.push({
+      title: "Guardrails still inside budget",
+      detail: "Loss and exposure remain comfortably below configured thresholds, so the operator can focus on fills and timeline progression.",
+      tone: "success",
+    });
+  }
+
+  if (snapshot.orders.length === 0) {
+    items.push({
+      title: "No recent order flow",
+      detail: "The paper engine is live, but no current-session fills are visible yet. Publish a market or strategy scenario from Lab to kick off execution.",
+      tone: "info",
+    });
+  } else {
+    items.push({
+      title: "Recent order flow available",
+      detail: `${formatNumber(snapshot.orders.length, 0)} recent fills are already on the dashboard, so execution drag and exposure can be reviewed in one place.`,
+      tone: "info",
+    });
+  }
+
+  return items;
 }
 
 function MetricGrid({
@@ -378,6 +492,17 @@ export function DashboardLiveMonitor() {
   const timelinePoints = snapshot?.timeline ?? [];
   const latestTimelinePoint = timelineStream.lastPoint ?? timelinePoints[timelinePoints.length - 1];
   const riskPosture = getRiskPosture(snapshot);
+  const operatorSnapshotSummary = buildOperatorSnapshotSummary(
+    snapshot,
+    riskPosture,
+    currentErrorCopy,
+  );
+  const attentionItems = buildAttentionItems(
+    snapshot,
+    riskPosture,
+    timelineStreamStatus,
+    timelineStream.error ?? undefined,
+  );
   const openExposure = getOpenExposure(snapshot?.positions ?? []);
   const currentLossUsage = Math.max(-Number(snapshot?.report.total_pnl ?? 0), 0);
   const maxDailyLoss = Number(snapshot?.rules.risk_controls.max_daily_loss ?? 0);
@@ -554,6 +679,63 @@ export function DashboardLiveMonitor() {
             <p className="text-sm text-slate-400">{riskPosture.detail}</p>
           </div>
         </div>
+      </section>
+
+      <section className="grid gap-6 xl:grid-cols-[minmax(0,1.1fr)_minmax(340px,0.9fr)]">
+        <Panel
+          eyebrow="Operator briefing"
+          title="What matters right now"
+          description="This briefing compresses the current-session read model into one operator-facing summary so the next action is obvious before scanning deeper tables."
+          tone="soft"
+        >
+          <div className="grid gap-3 sm:grid-cols-3">
+            <div className="rounded-[22px] border border-white/8 bg-white/[0.04] p-4">
+              <div className="text-[11px] uppercase tracking-[0.18em] text-slate-500">
+                Current focus
+              </div>
+              <div className="mt-2 text-lg font-medium text-white">
+                {operatorSnapshotSummary.currentFocus}
+              </div>
+            </div>
+            <div className="rounded-[22px] border border-white/8 bg-white/[0.04] p-4">
+              <div className="text-[11px] uppercase tracking-[0.18em] text-slate-500">
+                Next move
+              </div>
+              <div className="mt-2 text-lg font-medium text-white">
+                {operatorSnapshotSummary.nextMove}
+              </div>
+            </div>
+            <div className="rounded-[22px] border border-white/8 bg-white/[0.04] p-4">
+              <div className="text-[11px] uppercase tracking-[0.18em] text-slate-500">
+                Scope
+              </div>
+              <div className="mt-2 text-lg font-medium text-white">
+                {operatorSnapshotSummary.scope}
+              </div>
+            </div>
+          </div>
+        </Panel>
+
+        <Panel
+          eyebrow="Attention queue"
+          title="Where to look next"
+          description="The dashboard highlights the most important live-session changes so operators can react without mentally merging every panel first."
+          tone="accent"
+        >
+          <div className="grid gap-3">
+            {attentionItems.map((item) => (
+              <div
+                key={item.title}
+                className="rounded-[22px] border border-white/8 bg-white/[0.04] p-4"
+              >
+                <div className="flex flex-wrap items-center gap-3">
+                  <Badge tone={item.tone}>{item.title}</Badge>
+                </div>
+                <p className="mt-3 text-sm leading-6 text-slate-300">{item.detail}</p>
+              </div>
+            ))}
+          </div>
+        </Panel>
       </section>
 
       <section className="grid gap-6 xl:grid-cols-[minmax(0,1.35fr)_minmax(340px,0.85fr)]">

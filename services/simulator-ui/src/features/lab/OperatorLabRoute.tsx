@@ -100,6 +100,13 @@ interface ActivityDescription {
   tone?: ActivityTone;
 }
 
+interface WorkflowLane {
+  title: string;
+  summary: string;
+  nextAction: string;
+  tone: "success" | "warning" | "info";
+}
+
 interface StatusCalloutProps {
   action?: ReactNode;
   className?: string;
@@ -349,6 +356,67 @@ function describeManualSignalSuccess(payload: SignalExecutionResponse): Activity
   };
 }
 
+function getWorkflowLanes(input: {
+  currentSession: SimulationSession | undefined;
+  marketCatalogReady: number;
+  previewCount: number;
+  strategyCatalogReady: number;
+  strategySignalsLoading: boolean;
+}): WorkflowLane[] {
+  const { currentSession, marketCatalogReady, previewCount, strategyCatalogReady, strategySignalsLoading } =
+    input;
+
+  return [
+    currentSession?.status === "running"
+      ? {
+          title: "1. Session lifecycle",
+          summary: `${currentSession.id} is live and can be reset or stopped from this route.`,
+          nextAction: "Use Start only when you want to mint or switch the live paper session.",
+          tone: "success",
+        }
+      : {
+          title: "1. Session lifecycle",
+          summary: "No running paper session is currently visible in the lab.",
+          nextAction: "Start a session before expecting market or signal actions to show up on the dashboard.",
+          tone: "warning",
+        },
+    marketCatalogReady > 0
+      ? {
+          title: "2. Market replay",
+          summary: `${formatCount(marketCatalogReady)} market scenarios are ready for publish or replay.`,
+          nextAction: "Publish latest for a fast spot-check, or replay a full scenario when you want a longer live stream.",
+          tone: "success",
+        }
+      : {
+          title: "2. Market replay",
+          summary: "Market replay catalogs have not loaded yet.",
+          nextAction: "Refresh catalogs before trying to publish quote scenarios.",
+          tone: "warning",
+        },
+    strategyCatalogReady > 0
+      ? {
+          title: "3. Strategy replay",
+          summary: strategySignalsLoading
+            ? "Scenario and signal catalogs are loading for the selected strategy context."
+            : `${formatCount(previewCount)} preview signals are visible for the current slice.`,
+          nextAction: "Use publish for a bounded slice, or replay all when you want the whole scenario to flow through the simulator.",
+          tone: strategySignalsLoading ? "info" : "success",
+        }
+      : {
+          title: "3. Strategy replay",
+          summary: "Strategy scenarios are not ready yet.",
+          nextAction: "Refresh catalogs before relying on signal replay or slice publishing.",
+          tone: "warning",
+        },
+    {
+      title: "4. Manual override",
+      summary: "Manual signal dispatch stays available as the fastest override path.",
+      nextAction: "Use this only when you need to inject one explicit signal without replaying a whole scenario.",
+      tone: "info",
+    },
+  ];
+}
+
 export function OperatorLabRoute() {
   const [activity, setActivity] = useState<ActivityItem[]>([]);
   const [sessionIdDraft, setSessionIdDraft] = useState<string | null>(null);
@@ -590,6 +658,13 @@ export function OperatorLabRoute() {
   const marketCatalogReady = marketScenariosQuery.data?.length ?? 0;
   const strategyCatalogReady = strategyScenariosQuery.data?.length ?? 0;
   const previewCount = previewSignals.length;
+  const workflowLanes = getWorkflowLanes({
+    currentSession: currentSessionQuery.data,
+    marketCatalogReady,
+    previewCount,
+    strategyCatalogReady,
+    strategySignalsLoading: strategySignalsQuery.isLoading,
+  });
 
   return (
     <>
@@ -700,6 +775,72 @@ export function OperatorLabRoute() {
         />
       </section>
 
+      <section className="grid gap-6 xl:grid-cols-[minmax(0,1.2fr)_minmax(340px,0.8fr)]">
+        <Panel
+          eyebrow="Runbook"
+          title="Recommended operator sequence"
+          description="The lab keeps mutating controls separated by workflow so operators can move from session setup to replay to manual override without guessing what comes next."
+          tone="soft"
+        >
+          <div className="grid gap-3 lg:grid-cols-2">
+            {workflowLanes.map((lane) => (
+              <div
+                key={lane.title}
+                className="rounded-[22px] border border-white/8 bg-white/[0.04] p-4"
+              >
+                <div className="flex flex-wrap items-center gap-3">
+                  <Badge tone={lane.tone}>{lane.title}</Badge>
+                </div>
+                <div className="mt-3 text-sm font-medium text-white">{lane.summary}</div>
+                <p className="mt-2 text-sm leading-6 text-slate-400">{lane.nextAction}</p>
+              </div>
+            ))}
+          </div>
+        </Panel>
+
+        <Panel
+          eyebrow="Mutation posture"
+          title="What is safe to do next"
+          description="This side panel makes the current control posture explicit before you fire a mutation."
+          tone="accent"
+        >
+          <div className="grid gap-3">
+            <div className="rounded-[22px] border border-white/8 bg-white/[0.04] p-4">
+              <div className="flex flex-wrap items-center gap-3">
+                <Badge tone={currentSessionQuery.data?.status === "running" ? "success" : "warning"}>
+                  {currentSessionQuery.data?.status === "running" ? "Live session ready" : "Session action needed"}
+                </Badge>
+              </div>
+              <p className="mt-3 text-sm leading-6 text-slate-300">
+                {currentSessionQuery.data?.status === "running"
+                  ? "Market and strategy mutations will feed the current live paper session immediately."
+                  : "Start a paper session first so replay and publish actions have an active target."}
+              </p>
+            </div>
+            <div className="rounded-[22px] border border-white/8 bg-white/[0.04] p-4">
+              <div className="flex flex-wrap items-center gap-3">
+                <Badge tone={anyMutationPending ? "warning" : "info"}>
+                  {anyMutationPending ? "Mutation in flight" : "No mutation in flight"}
+                </Badge>
+              </div>
+              <p className="mt-3 text-sm leading-6 text-slate-300">
+                {anyMutationPending
+                  ? "Wait for the current action to settle before queuing another sensitive lifecycle change."
+                  : "This is a good time to run the next publish, replay, or lifecycle action."}
+              </p>
+            </div>
+            <div className="rounded-[22px] border border-white/8 bg-white/[0.04] p-4">
+              <div className="flex flex-wrap items-center gap-3">
+                <Badge tone="danger">Reset and stop are destructive</Badge>
+              </div>
+              <p className="mt-3 text-sm leading-6 text-slate-300">
+                Reset restarts the current session state. Stop closes the active paper session and should usually be the last lifecycle action in a run.
+              </p>
+            </div>
+          </div>
+        </Panel>
+      </section>
+
       <section className="grid gap-6 2xl:grid-cols-[minmax(0,1.3fr)_minmax(340px,0.7fr)]">
         <div className="grid gap-6 xl:grid-cols-2">
           <Panel
@@ -739,6 +880,15 @@ export function OperatorLabRoute() {
             }
           >
             <form className="grid gap-4" onSubmit={(event) => void handleStartSession(event)}>
+              <div className="rounded-[22px] border border-white/8 bg-white/[0.04] p-4">
+                <div className="flex flex-wrap items-center gap-3">
+                  <Badge tone="info">Recommended order</Badge>
+                  <Badge tone="warning">Start → Reset → Stop</Badge>
+                </div>
+                <p className="mt-3 text-sm leading-6 text-slate-400">
+                  Start is for minting or switching the live session. Reset is for replaying the same lane from a clean slate. Stop should usually be the final lifecycle action after monitoring the run.
+                </p>
+              </div>
               <Input
                 hint="Leave blank only if the backend should mint a session ID."
                 label="Session ID"

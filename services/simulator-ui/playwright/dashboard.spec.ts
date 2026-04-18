@@ -139,12 +139,15 @@ test("dashboard mounts current-session SSE and renders live monitor data", async
   await page.goto("/dashboard");
 
   await expect(page.getByRole("heading", { name: "Current-session live monitor" })).toBeVisible();
+  await expect(page.getByRole("heading", { name: "What matters right now" })).toBeVisible();
+  await expect(page.getByRole("heading", { name: "Where to look next" })).toBeVisible();
   await expect(page.getByText("paper-current", { exact: true })).toBeVisible();
   await expect(page.getByText("$10,250.00", { exact: true })).toBeVisible();
   await expect(page.getByRole("heading", { name: "Open positions" })).toBeVisible();
   await expect(
     page.getByRole("table", { name: "Current positions" }).getByRole("cell", { name: "BTCUSDT" }),
   ).toBeVisible();
+  await expect(page.getByText("Recent order flow available")).toBeVisible();
 
   await expect
     .poll(async () => getEventSourceUrls(page))

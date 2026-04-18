@@ -63,6 +63,8 @@ test("lab route runs operator actions and records activity locally", async ({ pa
   await page.goto("/lab");
 
   await expect(page.getByRole("heading", { name: "Current session control" })).toBeVisible();
+  await expect(page.getByRole("heading", { name: "Recommended operator sequence" })).toBeVisible();
+  await expect(page.getByRole("heading", { name: "What is safe to do next" })).toBeVisible();
   await expect(page.getByRole("cell", { name: "baseline-trend" })).toBeVisible();
 
   await page.getByLabel("Session ID").fill("paper-alpha-live");
