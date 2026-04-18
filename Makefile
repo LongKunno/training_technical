@@ -1,4 +1,4 @@
-.PHONY: up down test test-go test-py lint-go lint-py migrate-up migrate-down smoke-paper smoke-paper-kafka smoke-restore clean-docker clean-docker-all
+.PHONY: up down test test-go test-py lint-go lint-py typecheck-ui lint-ui test-ui build-ui test-e2e-ui migrate-up migrate-down smoke-paper smoke-paper-kafka smoke-restore clean-docker clean-docker-all
 
 up:
 	docker compose up --build
@@ -24,6 +24,21 @@ lint-py:
 	docker compose build data_pipeline
 	docker compose run --rm --no-deps data_pipeline sh -lc 'ruff check app tests'
 
+typecheck-ui:
+	npm --prefix services/simulator-ui run typecheck
+
+lint-ui:
+	npm --prefix services/simulator-ui run lint
+
+test-ui:
+	npm --prefix services/simulator-ui run test
+
+build-ui:
+	npm --prefix services/simulator-ui run build
+
+test-e2e-ui:
+	npm --prefix services/simulator-ui run test:e2e
+
 migrate-up:
 	docker compose up migrations
 
@@ -32,15 +47,15 @@ migrate-down:
 	docker compose run --rm migrations -path=/migrations -database=postgres://root:rootpassword@postgres:5432/crypto_sim?sslmode=disable down 1
 
 smoke-paper:
-	docker compose up -d postgres redis kafka migrations core_trading data_pipeline simulator_ui
+	docker compose up -d --build postgres redis kafka migrations core_trading data_pipeline simulator_ui
 	COMPOSE_PROFILES=ops docker compose run --rm --no-deps smoke_runner
 
 smoke-paper-kafka:
-	docker compose up -d postgres redis kafka migrations core_trading data_pipeline simulator_ui
+	docker compose up -d --build postgres redis kafka migrations core_trading data_pipeline simulator_ui
 	COMPOSE_PROFILES=ops docker compose run --rm --no-deps --entrypoint "sh /scripts/smoke-paper-kafka.sh" smoke_runner
 
 smoke-restore:
-	docker compose up -d postgres redis kafka migrations core_trading data_pipeline simulator_ui
+	docker compose up -d --build postgres redis kafka migrations core_trading data_pipeline simulator_ui
 	COMPOSE_PROFILES=ops docker compose run --rm --no-deps --entrypoint "sh /scripts/smoke-session-restore-prepare.sh" smoke_runner
 	docker compose restart core_trading
 	COMPOSE_PROFILES=ops docker compose run --rm --no-deps --entrypoint "sh /scripts/smoke-session-restore-verify.sh" smoke_runner

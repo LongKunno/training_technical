@@ -4,7 +4,7 @@
 
 ## 1. Current Snapshot
 
-`Last updated`: 2026-04-17
+`Last updated`: 2026-04-18
 
 ### Những gì đang có thật trong repo
 
@@ -89,7 +89,12 @@
   - `ruff` config
   - GitHub Actions workflow `docker-ci`
   - smoke script liên service
-  - dashboard nội bộ v1 ở `services/simulator-ui`, tách `current session` và `selected session` để tránh trộn ngữ cảnh realtime/lịch sử
+  - frontend app thật ở `services/simulator-ui` dùng `React + Vite + TypeScript`
+  - Node runtime serve build và proxy `/core/*`, `/data/*`
+  - route map `dashboard`, `sessions`, `sessions/:sessionId`, `lab`
+  - current session live monitor tách khỏi historical session views
+  - charts dùng `ECharts`, shared API/query/state layer dùng `TanStack Query + Zustand`
+  - FE quality gates local: `typecheck`, `lint`, `vitest`, `playwright`
   - `.antigravityrules` tối giản chỉ giữ rule `Docker-only test`
 
 ### Những gì đã verify thành công trong Docker
@@ -122,6 +127,16 @@ curl http://localhost:18000/health
 
 ```bash
 http://localhost:18020
+```
+
+### Frontend quality gates
+
+```bash
+make typecheck-ui
+make lint-ui
+make test-ui
+make build-ui
+make test-e2e-ui
 ```
 
 ### Kiểm tra session và paper trading API
@@ -218,21 +233,22 @@ make clean-docker-all
 - 2026-04-17: Thêm strategy mock flow ở Python với signal fixtures, publish slice và replay.
 - 2026-04-17: Thêm dashboard nội bộ v1 chạy trong Docker qua service `simulator_ui`.
 - 2026-04-18: Mở rộng Go/UI với `GET /api/paper/sessions`, `report/audit/timeline` theo `session_id`, SSE timeline cho current session, session history panel và selected-session detail trên dashboard.
+- 2026-04-18: Rebuild `services/simulator-ui` thành app `React + Vite + TypeScript` với Node runtime, route-level operator UX, shared query/state layer và charting bằng `ECharts`.
 - 2026-04-17: Mở rộng smoke flow sang chuỗi `UI -> start session -> publish strategy signal -> publish price -> report/audit -> stop session`, đồng thời thêm smoke riêng cho Kafka path và restore path.
 - 2026-04-17: Chốt `Docker-only` verification cho `lint-go`, `lint-py`, `test-go`, `test-py`, `smoke-paper`, `smoke-paper-kafka`, `smoke-restore`.
 
 ## 4. Next Recommended Slices
 
-1. Nếu muốn dashboard sâu hơn, bước hợp lý tiếp theo là chuyển từ timeline columns sang line chart thực thụ với overlay equity/drawdown.
-2. Nếu muốn multi-session mạnh hơn, thêm detail page hoặc paging sâu cho session history thay vì chỉ list nhanh trong dashboard.
-3. Nếu local dev cần nhanh hơn, cân nhắc cache hoặc prebuilt image riêng cho `golangci-lint` để khỏi cài lại trong mỗi lượt `make lint-go`.
-4. Nếu muốn tiến tới phase tiếp theo, có thể thêm strategy comparison view và alerting panel chi tiết hơn trên dashboard.
+1. Nếu muốn giảm JS bundle, bước hợp lý tiếp theo là route-level code splitting cho dashboard/sessions/lab và tách ECharts khỏi bundle đầu tiên.
+2. Nếu muốn multi-session mạnh hơn, thêm paging sâu hơn và historical chart overlays thay vì chỉ selected-session recap.
+3. Nếu local dev cần nhanh hơn, thêm compose profile riêng cho Vite dev server thay vì chỉ runtime image production.
+4. Nếu muốn tiến tới phase tiếp theo, có thể thêm e2e browser specs thật cho current-vs-historical isolation và lab workflows.
 
 ## 5. Open Risks / Decisions
 
 - `StateStore.SaveState` hiện xóa và ghi lại `paper_orders`, `paper_positions`, `market_prices`, và audit rows của current session để đồng bộ với session reset; cách này phù hợp local simulator v1 nhưng chưa tối ưu cho throughput cao.
 - Session history đã được expose ở mức list + selected-session reads, nhưng chưa có paging sâu, sort options hay detail page riêng.
-- Dashboard hiện là `operator console` dùng static UI + nginx proxy; đủ dùng cho local dev nhưng chưa có auth, charting sâu hay websocket updates ngoài SSE timeline của current session.
+- Frontend đã lên nền `React + Vite + TypeScript`, nhưng `playwright` mới dừng ở config/foundation; chưa có browser specs chạy contract thật.
 - `make lint-go` vẫn cài `golangci-lint` trong container mỗi lần chạy để giữ đúng Go toolchain; sạch cho host nhưng tốn thời gian hơn một chút.
 
 ## 6. Update Checklist

@@ -21,7 +21,7 @@ wait_for_url http://data_pipeline:8000/health
 wait_for_url http://simulator_ui/
 
 ui_page=$(curl -fsS http://simulator_ui/)
-printf '%s' "$ui_page" | grep -q "Simulator Control Deck"
+printf '%s' "$ui_page" | grep -q "Simulator Operator Platform"
 
 session_response=$(
   curl -fsS \

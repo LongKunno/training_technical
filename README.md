@@ -15,8 +15,8 @@ Repo này đang đi theo hướng `simulator-first`: ưu tiên `paper trading`, 
   - HTTP publish sang Go internal ingest
   - Kafka publish tùy chọn cho `PriceTickV1`
 - `services/simulator-ui`
-  - dashboard nội bộ v1 để điều khiển current session, market replay, strategy publish, session history, selected-session audit/timeline và report
-  - reverse proxy sang Go/Python services qua `/core/*` và `/data/*`
+  - frontend product-grade `React + Vite + TypeScript` cho operator dashboard, session history/detail và lab controls
+  - Node runtime serve bundle và same-origin proxy sang Go/Python services qua `/core/*` và `/data/*`
 - `docker-compose.yml`
   - `postgres`, `redis`, `kafka`, `migrations`, `core_trading`, `data_pipeline`, `simulator_ui`, `smoke_runner`
 - Host ports mặc định
@@ -46,7 +46,17 @@ curl http://localhost:18080/health
 curl http://localhost:18000/health
 ```
 
-Dashboard: `http://localhost:18020`
+Operator UI: `http://localhost:18020`
+
+Frontend local quality gates:
+
+```bash
+make typecheck-ui
+make lint-ui
+make test-ui
+make build-ui
+make test-e2e-ui
+```
 
 ## API nhanh để thử tay
 
@@ -126,10 +136,20 @@ make smoke-paper-kafka
 make smoke-restore
 ```
 
+Frontend checks chạy local bằng Node:
+
+```bash
+make typecheck-ui
+make lint-ui
+make test-ui
+make build-ui
+make test-e2e-ui
+```
+
 Smoke flow hiện tại verify chuỗi:
 
 ```text
-UI root -> start session A -> publish strategy signal -> publish mock price -> portfolio -> sell signal -> report/audit/timeline -> stop A -> start B -> sessions/history lookup -> session-scoped reads -> stop B
+UI entrypoint -> start session A -> publish strategy signal -> publish mock price -> portfolio -> sell signal -> report/audit/timeline -> stop A -> start B -> sessions/history lookup -> session-scoped reads -> stop B
 ```
 
 ## Cleanup
