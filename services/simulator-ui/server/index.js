@@ -14,6 +14,7 @@ const coreTarget =
   process.env.SIMULATOR_UI_CORE_PROXY_TARGET ?? "http://core_trading:8080";
 const dataTarget =
   process.env.SIMULATOR_UI_DATA_PROXY_TARGET ?? "http://data_pipeline:8000";
+const startedAt = new Date().toISOString();
 
 const distDir = path.resolve(__dirname, "../dist");
 const indexFile = path.join(distDir, "index.html");
@@ -27,6 +28,36 @@ const app = express();
 
 app.disable("x-powered-by");
 app.set("trust proxy", true);
+
+app.get("/health", (_request, response) => {
+  response.json({
+    mode: process.env.NODE_ENV ?? "production",
+    service: "simulator_ui",
+    started_at: startedAt,
+    status: "ok",
+    upstreams: {
+      core: coreTarget,
+      data: dataTarget,
+    },
+  });
+});
+
+const isBlockedOpsRoute = (requestPath) =>
+  requestPath.startsWith("/core/internal/ops") || requestPath.startsWith("/data/internal/ops");
+
+app.use((request, response, next) => {
+  if (!isBlockedOpsRoute(request.path)) {
+    next();
+    return;
+  }
+
+  response.status(404).json({
+    error: {
+      code: "not_found",
+      message: "Not found",
+    },
+  });
+});
 
 const createUpstreamProxy = (target) =>
   createProxyMiddleware({

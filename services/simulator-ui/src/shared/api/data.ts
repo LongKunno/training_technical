@@ -11,6 +11,9 @@ import type {
   ReplayQuotesResponse,
   ReplaySignalsRequest,
   ReplaySignalsResponse,
+  ScenarioCatalogResponse,
+  ScenarioDetailResponse,
+  ServiceHealth,
   StrategyScenariosResponse,
   StrategySignalsQuery,
   StrategySignalsResponse,
@@ -20,6 +23,10 @@ import { createJsonApiClient } from "./http";
 const dataClient = createJsonApiClient("/data");
 
 export const dataApi = {
+  getHealth(options?: ApiRequestOptions) {
+    return dataClient.get<ServiceHealth>("/health", undefined, options);
+  },
+
   getLatestQuote(query: LatestQuoteQuery, options?: ApiRequestOptions) {
     return dataClient
       .get<LatestQuoteResponse>("/api/data/market/quotes/latest", query, options)
@@ -30,6 +37,18 @@ export const dataApi = {
     return dataClient
       .get<MarketScenariosResponse>("/api/data/market/quotes/replay/scenarios", undefined, options)
       .then((payload) => payload.scenarios);
+  },
+
+  listMarketScenarioCatalog(options?: ApiRequestOptions) {
+    return dataClient
+      .get<ScenarioCatalogResponse>("/api/data/market/quotes/replay/catalog", undefined, options)
+      .then((payload) => payload.scenarios);
+  },
+
+  getMarketScenario(scenarioId: string, options?: ApiRequestOptions) {
+    return dataClient
+      .get<ScenarioDetailResponse>(`/api/data/market/quotes/replay/catalog/${encodeURIComponent(scenarioId)}`, undefined, options)
+      .then((payload) => payload.scenario);
   },
 
   publishQuotes(body: PublishQuotesRequest = {}, options?: ApiRequestOptions) {
@@ -76,4 +95,3 @@ export const dataApi = {
     );
   },
 };
-

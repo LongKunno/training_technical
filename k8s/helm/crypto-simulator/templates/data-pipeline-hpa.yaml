@@ -1,0 +1,29 @@
+{{- if .Values.autoscaling.dataPipeline.enabled }}
+apiVersion: autoscaling/v2
+kind: HorizontalPodAutoscaler
+metadata:
+  name: {{ include "crypto-simulator.dataPipelineServiceName" . }}
+  labels:
+    {{- include "crypto-simulator.labels" . | nindent 4 }}
+    app.kubernetes.io/component: data-pipeline
+spec:
+  scaleTargetRef:
+    apiVersion: apps/v1
+    kind: Deployment
+    name: {{ include "crypto-simulator.dataPipelineServiceName" . }}
+  minReplicas: {{ .Values.autoscaling.dataPipeline.minReplicas }}
+  maxReplicas: {{ .Values.autoscaling.dataPipeline.maxReplicas }}
+  metrics:
+    - type: Resource
+      resource:
+        name: cpu
+        target:
+          type: Utilization
+          averageUtilization: {{ .Values.autoscaling.dataPipeline.targetCPUUtilizationPercentage }}
+    - type: Resource
+      resource:
+        name: memory
+        target:
+          type: Utilization
+          averageUtilization: {{ .Values.autoscaling.dataPipeline.targetMemoryUtilizationPercentage }}
+{{- end }}

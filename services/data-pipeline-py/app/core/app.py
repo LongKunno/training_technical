@@ -22,6 +22,7 @@ def create_app(
         description=app_settings.app_description,
         version=app_settings.app_version,
     )
+    app.state.settings = app_settings
     app.state.market_data_service = market_data_service or MockMarketDataService(
         app_settings.market_data_fixture_path,
     )

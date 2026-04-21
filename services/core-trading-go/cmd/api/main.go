@@ -16,6 +16,7 @@ import (
 	"crypto_simulator/core_trading/internal/marketdata"
 	"crypto_simulator/core_trading/internal/papertrading"
 	"crypto_simulator/core_trading/internal/server"
+	"crypto_simulator/core_trading/internal/simulation"
 	"crypto_simulator/core_trading/internal/storage/postgres"
 
 	_ "github.com/jackc/pgx/v5/stdlib"
@@ -29,9 +30,11 @@ func main() {
 	defer stop()
 
 	var (
-		db         *sql.DB
-		stateStore papertrading.StateStore
-		err        error
+		db            *sql.DB
+		postgresStore *postgres.StateStore
+		stateStore    papertrading.StateStore
+		simService    *simulation.Service
+		err           error
 	)
 
 	if cfg.PaperStateStoreEnabled {
@@ -52,13 +55,33 @@ func main() {
 		}
 		cancel()
 
-		stateStore = postgres.NewStateStore(db)
+		postgresStore = postgres.NewStateStore(db)
+		stateStore = postgresStore
 	}
 
 	engine, err := bootstrapEngine(cfg, stateStore)
 	if err != nil {
 		fmt.Println("Failed to initialize paper trading engine:", err)
 		return
+	}
+
+	if postgresStore != nil {
+		simService = simulation.NewService(
+			cfg.PaperAccountID,
+			engine,
+			postgresStore,
+			simulation.NewHTTPRunnerClient(cfg.BotRunnerBaseURL, nil),
+			simulation.NewHTTPScenarioCatalogClient(cfg.DataPipelineBaseURL, nil),
+		)
+		if err := simService.Restore(ctx); err != nil {
+			fmt.Println("Failed to restore simulation experiments:", err)
+			return
+		}
+		simService.StartCoordinator(
+			ctx,
+			time.Duration(cfg.SimulationReconcileIntervalSeconds)*time.Second,
+			time.Duration(cfg.SimulationHeartbeatTimeoutSeconds)*time.Second,
+		)
 	}
 
 	if cfg.KafkaBootstrapServers != "" {
@@ -77,7 +100,7 @@ func main() {
 		}()
 	}
 
-	router := server.NewRouter(engine)
+	router := server.NewRouter(engine, simService)
 	httpServer := &http.Server{
 		Addr:    ":" + cfg.Port,
 		Handler: router,
@@ -119,8 +142,10 @@ func bootstrapEngine(cfg config.Config, store papertrading.StateStore) (*papertr
 		return nil, err
 	}
 	if found {
-		state.Rules = rules
-		return papertrading.NewEngineFromPersistentState(state, store)
+		return papertrading.NewEngineFromPersistentState(state, papertrading.SessionExecutionProfile{
+			InitialBalance: cfg.PaperInitialBalance,
+			Rules:          rules,
+		}, store)
 	}
 
 	return papertrading.NewEngineWithStore(cfg.PaperAccountID, cfg.PaperInitialBalance, rules, store)

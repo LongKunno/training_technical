@@ -134,7 +134,7 @@ export function getStreamBadgeTone(
       return "success";
     case "connecting":
       return "info";
-    case "error":
+    case "degraded":
       return "warning";
     default:
       return "neutral";
@@ -147,7 +147,7 @@ export function describeTimelineStreamStatus(status: TimelineStreamStatus): stri
       return "Live";
     case "connecting":
       return "Connecting";
-    case "error":
+    case "degraded":
       return "Reconnecting";
     default:
       return "Idle";

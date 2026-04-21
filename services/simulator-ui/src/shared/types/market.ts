@@ -34,6 +34,32 @@ export interface MarketScenariosResponse {
   scenarios: string[];
 }
 
+export interface ScenarioCatalogEntry {
+  scenario_id: string;
+  name: string;
+  description: string;
+  symbols: string[];
+  tick_count: number;
+  started_at: IsoDateTimeString;
+  ended_at: IsoDateTimeString;
+  tags: string[];
+  microstructure_profile: MarketMicrostructureProfile;
+}
+
+export interface MarketMicrostructureProfile {
+  signal_latency_ticks: number;
+  spread_bps: number;
+  max_fill_notional_per_tick: number;
+}
+
+export interface ScenarioCatalogResponse {
+  scenarios: ScenarioCatalogEntry[];
+}
+
+export interface ScenarioDetailResponse {
+  scenario: ScenarioCatalogEntry;
+}
+
 export interface PublishQuotesResponse {
   scenario: string;
   published_count: number;

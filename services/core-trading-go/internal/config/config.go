@@ -11,28 +11,34 @@ const (
 	defaultPaperAccountID         = "paper-account-1"
 	defaultPaperInitialBalance    = 10000.0
 	defaultDBURI                  = "postgres://root:rootpassword@postgres:5432/crypto_sim?sslmode=disable"
+	defaultBotRunnerBaseURL       = "http://bot_runner:8001"
+	defaultDataPipelineBaseURL    = "http://data_pipeline:8000"
 	defaultKafkaTopic             = "price-ticks-v1"
 	defaultKafkaConsumerGroupID   = "core-trading-paper-engine"
 	defaultPaperStateStoreEnabled = false
 )
 
 type Config struct {
-	Port                   string
-	DBURI                  string
-	PaperStateStoreEnabled bool
-	PaperAccountID         string
-	PaperInitialBalance    float64
-	PaperFeeRate           float64
-	PaperSlippageRate      float64
-	PaperAllowedSymbols    []string
-	PaperMaxPositionQty    float64
-	PaperMaxOrderNotional  float64
-	PaperMaxDailyLoss      float64
-	PaperCooldownSeconds   int
-	PaperMaxOpenNotional   float64
-	KafkaBootstrapServers  string
-	KafkaTopic             string
-	KafkaConsumerGroupID   string
+	Port                               string
+	DBURI                              string
+	PaperStateStoreEnabled             bool
+	PaperAccountID                     string
+	PaperInitialBalance                float64
+	PaperFeeRate                       float64
+	PaperSlippageRate                  float64
+	PaperAllowedSymbols                []string
+	PaperMaxPositionQty                float64
+	PaperMaxOrderNotional              float64
+	PaperMaxDailyLoss                  float64
+	PaperCooldownSeconds               int
+	PaperMaxOpenNotional               float64
+	SimulationHeartbeatTimeoutSeconds  int
+	SimulationReconcileIntervalSeconds int
+	BotRunnerBaseURL                   string
+	DataPipelineBaseURL                string
+	KafkaBootstrapServers              string
+	KafkaTopic                         string
+	KafkaConsumerGroupID               string
 }
 
 func Load() Config {
@@ -116,6 +122,30 @@ func Load() Config {
 		}
 	}
 
+	simulationHeartbeatTimeoutSeconds := 30
+	if rawHeartbeatTimeout := os.Getenv("SIM_HEARTBEAT_TIMEOUT_SECONDS"); rawHeartbeatTimeout != "" {
+		if parsedHeartbeatTimeout, err := strconv.Atoi(rawHeartbeatTimeout); err == nil && parsedHeartbeatTimeout > 0 {
+			simulationHeartbeatTimeoutSeconds = parsedHeartbeatTimeout
+		}
+	}
+
+	simulationReconcileIntervalSeconds := 5
+	if rawReconcileInterval := os.Getenv("SIM_RECONCILE_INTERVAL_SECONDS"); rawReconcileInterval != "" {
+		if parsedReconcileInterval, err := strconv.Atoi(rawReconcileInterval); err == nil && parsedReconcileInterval > 0 {
+			simulationReconcileIntervalSeconds = parsedReconcileInterval
+		}
+	}
+
+	botRunnerBaseURL := os.Getenv("BOT_RUNNER_BASE_URL")
+	if botRunnerBaseURL == "" {
+		botRunnerBaseURL = defaultBotRunnerBaseURL
+	}
+
+	dataPipelineBaseURL := os.Getenv("DATA_PIPELINE_BASE_URL")
+	if dataPipelineBaseURL == "" {
+		dataPipelineBaseURL = defaultDataPipelineBaseURL
+	}
+
 	kafkaBootstrapServers := os.Getenv("CORE_TRADING_KAFKA_BOOTSTRAP_SERVERS")
 
 	kafkaTopic := os.Getenv("CORE_TRADING_KAFKA_TOPIC")
@@ -129,22 +159,26 @@ func Load() Config {
 	}
 
 	return Config{
-		Port:                   port,
-		DBURI:                  dbURI,
-		PaperStateStoreEnabled: paperStateStoreEnabled,
-		PaperAccountID:         paperAccountID,
-		PaperInitialBalance:    paperInitialBalance,
-		PaperFeeRate:           paperFeeRate,
-		PaperSlippageRate:      paperSlippageRate,
-		PaperAllowedSymbols:    paperAllowedSymbols,
-		PaperMaxPositionQty:    paperMaxPositionQty,
-		PaperMaxOrderNotional:  paperMaxOrderNotional,
-		PaperMaxDailyLoss:      paperMaxDailyLoss,
-		PaperCooldownSeconds:   paperCooldownSeconds,
-		PaperMaxOpenNotional:   paperMaxOpenNotional,
-		KafkaBootstrapServers:  kafkaBootstrapServers,
-		KafkaTopic:             kafkaTopic,
-		KafkaConsumerGroupID:   kafkaConsumerGroupID,
+		Port:                               port,
+		DBURI:                              dbURI,
+		PaperStateStoreEnabled:             paperStateStoreEnabled,
+		PaperAccountID:                     paperAccountID,
+		PaperInitialBalance:                paperInitialBalance,
+		PaperFeeRate:                       paperFeeRate,
+		PaperSlippageRate:                  paperSlippageRate,
+		PaperAllowedSymbols:                paperAllowedSymbols,
+		PaperMaxPositionQty:                paperMaxPositionQty,
+		PaperMaxOrderNotional:              paperMaxOrderNotional,
+		PaperMaxDailyLoss:                  paperMaxDailyLoss,
+		PaperCooldownSeconds:               paperCooldownSeconds,
+		PaperMaxOpenNotional:               paperMaxOpenNotional,
+		SimulationHeartbeatTimeoutSeconds:  simulationHeartbeatTimeoutSeconds,
+		SimulationReconcileIntervalSeconds: simulationReconcileIntervalSeconds,
+		BotRunnerBaseURL:                   botRunnerBaseURL,
+		DataPipelineBaseURL:                dataPipelineBaseURL,
+		KafkaBootstrapServers:              kafkaBootstrapServers,
+		KafkaTopic:                         kafkaTopic,
+		KafkaConsumerGroupID:               kafkaConsumerGroupID,
 	}
 }
 

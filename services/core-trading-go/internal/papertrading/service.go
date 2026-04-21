@@ -12,30 +12,34 @@ import (
 )
 
 type Engine struct {
-	mu               sync.Mutex
-	account          VirtualAccount
-	initialBalance   float64
-	orderCounter     uint64
-	orders           []PaperOrder
-	lastTradePrices  map[string]float64
-	markPrices       map[string]marketdata.PriceTickV1
-	realizedPnL      float64
-	rules            SimulationRules
-	store            StateStore
-	currentSession   SimulationSession
-	auditEvents      []AuditEvent
-	feesPaid         float64
-	slippageCost     float64
-	filledOrders     int
-	rejectedSignals  int
-	symbolStats      map[string]sessionSymbolMetrics
-	peakEquity       float64
-	maxDrawdown      float64
-	timeline         []SessionTimelinePoint
-	lastOrderAt      map[string]time.Time
-	processedSignals map[string]struct{}
-	subscribers      map[uint64]chan SessionTimelinePoint
-	subscriberSeq    uint64
+	mu                   sync.Mutex
+	account              VirtualAccount
+	defaultBalance       float64
+	initialBalance       float64
+	orderCounter         uint64
+	orders               []PaperOrder
+	lastTradePrices      map[string]float64
+	markPrices           map[string]marketdata.PriceTickV1
+	realizedPnL          float64
+	defaultRules         SimulationRules
+	rules                SimulationRules
+	currentMarketProfile MarketExecutionProfile
+	store                StateStore
+	currentSession       SimulationSession
+	auditEvents          []AuditEvent
+	feesPaid             float64
+	slippageCost         float64
+	filledOrders         int
+	rejectedSignals      int
+	symbolStats          map[string]sessionSymbolMetrics
+	peakEquity           float64
+	maxDrawdown          float64
+	timeline             []SessionTimelinePoint
+	lastOrderAt          map[string]time.Time
+	pendingExecutions    []PendingExecution
+	processedSignals     map[string]struct{}
+	subscribers          map[uint64]chan SessionTimelinePoint
+	subscriberSeq        uint64
 }
 
 func NewEngine(accountID string, initialBalance float64) (*Engine, error) {
@@ -57,19 +61,22 @@ func NewEngineWithStore(accountID string, initialBalance float64, rules Simulati
 			CashBalance: initialBalance,
 			Positions:   make(map[string]Position),
 		},
-		initialBalance:  initialBalance,
-		lastTradePrices: make(map[string]float64),
-		markPrices:      make(map[string]marketdata.PriceTickV1),
-		rules:           rules,
-		store:           store,
-		subscribers:     make(map[uint64]chan SessionTimelinePoint),
+		defaultBalance:       initialBalance,
+		initialBalance:       initialBalance,
+		lastTradePrices:      make(map[string]float64),
+		markPrices:           make(map[string]marketdata.PriceTickV1),
+		defaultRules:         cloneSimulationRules(rules),
+		rules:                rules,
+		currentMarketProfile: MarketExecutionProfile{},
+		store:                store,
+		subscribers:          make(map[uint64]chan SessionTimelinePoint),
 	}
 	engine.bootstrapRuntimeState(time.Now().UTC())
 
 	return engine, nil
 }
 
-func NewEngineFromPersistentState(state PersistentState, store StateStore) (*Engine, error) {
+func NewEngineFromPersistentState(state PersistentState, defaultProfile SessionExecutionProfile, store StateStore) (*Engine, error) {
 	if state.Account.Positions == nil {
 		state.Account.Positions = make(map[string]Position)
 	}
@@ -77,18 +84,27 @@ func NewEngineFromPersistentState(state PersistentState, store StateStore) (*Eng
 	if err := validateEngineBootstrap(state.Account.ID, state.InitialBalance, state.Rules); err != nil {
 		return nil, err
 	}
+	if defaultProfile.InitialBalance <= 0 {
+		defaultProfile.InitialBalance = state.InitialBalance
+	}
+	if err := validateEngineBootstrap(state.Account.ID, defaultProfile.InitialBalance, defaultProfile.Rules); err != nil {
+		return nil, err
+	}
 
 	engine := &Engine{
-		account:         cloneAccount(state.Account),
-		initialBalance:  state.InitialBalance,
-		orderCounter:    deriveOrderCounter(state.Orders),
-		orders:          cloneOrders(state.Orders),
-		lastTradePrices: deriveLastTradePrices(state.Orders),
-		markPrices:      cloneMarketPrices(state.MarketPrices),
-		realizedPnL:     state.RealizedPnL,
-		rules:           state.Rules,
-		store:           store,
-		subscribers:     make(map[uint64]chan SessionTimelinePoint),
+		account:              cloneAccount(state.Account),
+		defaultBalance:       defaultProfile.InitialBalance,
+		initialBalance:       state.InitialBalance,
+		orderCounter:         deriveOrderCounter(state.Orders),
+		orders:               cloneOrders(state.Orders),
+		lastTradePrices:      deriveLastTradePrices(state.Orders),
+		markPrices:           cloneMarketPrices(state.MarketPrices),
+		realizedPnL:          state.RealizedPnL,
+		defaultRules:         cloneSimulationRules(defaultProfile.Rules),
+		rules:                state.Rules,
+		currentMarketProfile: cloneMarketExecutionProfile(state.MarketProfile),
+		store:                store,
+		subscribers:          make(map[uint64]chan SessionTimelinePoint),
 	}
 	engine.restoreRuntimeState(state, time.Now().UTC())
 
@@ -203,6 +219,19 @@ func (e *Engine) RulesSummary() RulesSummary {
 	}
 }
 
+func (e *Engine) DefaultRulesSummary() RulesSummary {
+	e.mu.Lock()
+	defer e.mu.Unlock()
+
+	return RulesSummary{
+		PaperAccountID: e.account.ID,
+		InitialBalance: e.defaultBalance,
+		FeeRate:        e.defaultRules.FeeRate,
+		SlippageRate:   e.defaultRules.SlippageRate,
+		RiskControls:   cloneRiskControls(e.defaultRules.RiskControls),
+	}
+}
+
 func (e *Engine) PositionsSummary() []PortfolioPositionSummary {
 	e.mu.Lock()
 	defer e.mu.Unlock()
@@ -237,6 +266,40 @@ func (e *Engine) ApplyMarketPrices(ticks []marketdata.PriceTickV1) (int, error) 
 			"price":  tick.Price,
 			"source": tick.Source,
 		})
+		pending := make([]PendingExecution, 0, len(e.pendingExecutions))
+		for _, execution := range e.pendingExecutions {
+			if execution.Symbol != tick.Symbol {
+				pending = append(pending, execution)
+				continue
+			}
+			if execution.RemainingLatencyTicks > 0 {
+				execution.RemainingLatencyTicks--
+				if execution.RemainingLatencyTicks > 0 {
+					pending = append(pending, execution)
+					continue
+				}
+			}
+			if _, err := e.processPendingExecutionSliceLocked(&execution, tick.Price, tick.Timestamp); err != nil {
+				e.rejectSignalLocked(SignalV1{
+					StrategyID: execution.StrategyID,
+					SignalID:   execution.SignalID,
+					RunID:      execution.RunID,
+					BotID:      execution.BotID,
+					BotVersion: execution.BotVersion,
+					Symbol:     execution.Symbol,
+					Side:       execution.Side,
+					Quantity:   execution.RequestedQuantity,
+					Notional:   execution.RequestedNotional,
+					PriceHint:  execution.RequestedPrice,
+					Timestamp:  execution.CreatedAt,
+				}, err)
+				continue
+			}
+			if execution.RemainingQuantity > 0 {
+				pending = append(pending, execution)
+			}
+		}
+		e.pendingExecutions = pending
 		e.updateDrawdownLocked()
 		e.appendTimelinePointLocked(tick.Timestamp, "market_tick")
 	}
@@ -336,6 +399,30 @@ func cloneOrders(orders []PaperOrder) []PaperOrder {
 	return slices.Clone(orders)
 }
 
+func clonePendingExecutions(input []PendingExecution) []PendingExecution {
+	output := make([]PendingExecution, 0, len(input))
+	for _, execution := range input {
+		output = append(output, PendingExecution{
+			OrderID:               execution.OrderID,
+			SignalID:              execution.SignalID,
+			StrategyID:            execution.StrategyID,
+			RunID:                 execution.RunID,
+			BotID:                 execution.BotID,
+			BotVersion:            execution.BotVersion,
+			Symbol:                execution.Symbol,
+			Side:                  execution.Side,
+			RequestedQuantity:     execution.RequestedQuantity,
+			RequestedNotional:     execution.RequestedNotional,
+			RequestedPrice:        execution.RequestedPrice,
+			RemainingQuantity:     execution.RemainingQuantity,
+			RemainingLatencyTicks: execution.RemainingLatencyTicks,
+			CreatedAt:             execution.CreatedAt,
+			Details:               cloneDetails(execution.Details),
+		})
+	}
+	return output
+}
+
 func cloneLastTradePrices(input map[string]float64) map[string]float64 {
 	output := make(map[string]float64, len(input))
 	for symbol, price := range input {
@@ -352,6 +439,14 @@ func (e *Engine) applySlippage(side OrderSide, requestedPrice float64) float64 {
 		return requestedPrice * (1 - e.rules.SlippageRate)
 	default:
 		return requestedPrice
+	}
+}
+
+func cloneMarketExecutionProfile(input MarketExecutionProfile) MarketExecutionProfile {
+	return MarketExecutionProfile{
+		SignalLatencyTicks:     input.SignalLatencyTicks,
+		SpreadBps:              input.SpreadBps,
+		MaxFillNotionalPerTick: input.MaxFillNotionalPerTick,
 	}
 }
 
@@ -454,56 +549,67 @@ func filterOrders(orders []PaperOrder, filter OrderFilter) []PaperOrder {
 }
 
 type engineStateSnapshot struct {
-	account          VirtualAccount
-	orderCounter     uint64
-	orders           []PaperOrder
-	lastTradePrices  map[string]float64
-	markPrices       map[string]marketdata.PriceTickV1
-	realizedPnL      float64
-	currentSession   SimulationSession
-	auditEvents      []AuditEvent
-	feesPaid         float64
-	slippageCost     float64
-	filledOrders     int
-	rejectedSignals  int
-	symbolStats      map[string]sessionSymbolMetrics
-	peakEquity       float64
-	maxDrawdown      float64
-	timeline         []SessionTimelinePoint
-	lastOrderAt      map[string]time.Time
-	processedSignals map[string]struct{}
+	account              VirtualAccount
+	initialBalance       float64
+	orderCounter         uint64
+	orders               []PaperOrder
+	lastTradePrices      map[string]float64
+	markPrices           map[string]marketdata.PriceTickV1
+	realizedPnL          float64
+	rules                SimulationRules
+	currentMarketProfile MarketExecutionProfile
+	currentSession       SimulationSession
+	auditEvents          []AuditEvent
+	feesPaid             float64
+	slippageCost         float64
+	filledOrders         int
+	rejectedSignals      int
+	symbolStats          map[string]sessionSymbolMetrics
+	peakEquity           float64
+	maxDrawdown          float64
+	timeline             []SessionTimelinePoint
+	lastOrderAt          map[string]time.Time
+	pendingExecutions    []PendingExecution
+	processedSignals     map[string]struct{}
 }
 
 func (e *Engine) snapshotLockedState() engineStateSnapshot {
 	return engineStateSnapshot{
-		account:          cloneAccount(e.account),
-		orderCounter:     e.orderCounter,
-		orders:           cloneOrders(e.orders),
-		lastTradePrices:  cloneLastTradePrices(e.lastTradePrices),
-		markPrices:       cloneMarketPrices(e.markPrices),
-		realizedPnL:      e.realizedPnL,
-		currentSession:   e.currentSession,
-		auditEvents:      cloneAuditEvents(e.auditEvents),
-		feesPaid:         e.feesPaid,
-		slippageCost:     e.slippageCost,
-		filledOrders:     e.filledOrders,
-		rejectedSignals:  e.rejectedSignals,
-		symbolStats:      cloneSymbolStats(e.symbolStats),
-		peakEquity:       e.peakEquity,
-		maxDrawdown:      e.maxDrawdown,
-		timeline:         cloneTimelinePoints(e.timeline),
-		lastOrderAt:      cloneTimeMap(e.lastOrderAt),
-		processedSignals: cloneSignalIndex(e.processedSignals),
+		account:              cloneAccount(e.account),
+		initialBalance:       e.initialBalance,
+		orderCounter:         e.orderCounter,
+		orders:               cloneOrders(e.orders),
+		lastTradePrices:      cloneLastTradePrices(e.lastTradePrices),
+		markPrices:           cloneMarketPrices(e.markPrices),
+		realizedPnL:          e.realizedPnL,
+		rules:                cloneSimulationRules(e.rules),
+		currentMarketProfile: cloneMarketExecutionProfile(e.currentMarketProfile),
+		currentSession:       e.currentSession,
+		auditEvents:          cloneAuditEvents(e.auditEvents),
+		feesPaid:             e.feesPaid,
+		slippageCost:         e.slippageCost,
+		filledOrders:         e.filledOrders,
+		rejectedSignals:      e.rejectedSignals,
+		symbolStats:          cloneSymbolStats(e.symbolStats),
+		peakEquity:           e.peakEquity,
+		maxDrawdown:          e.maxDrawdown,
+		timeline:             cloneTimelinePoints(e.timeline),
+		lastOrderAt:          cloneTimeMap(e.lastOrderAt),
+		pendingExecutions:    clonePendingExecutions(e.pendingExecutions),
+		processedSignals:     cloneSignalIndex(e.processedSignals),
 	}
 }
 
 func (e *Engine) restoreLockedState(snapshot engineStateSnapshot) {
 	e.account = snapshot.account
+	e.initialBalance = snapshot.initialBalance
 	e.orderCounter = snapshot.orderCounter
 	e.orders = snapshot.orders
 	e.lastTradePrices = snapshot.lastTradePrices
 	e.markPrices = snapshot.markPrices
 	e.realizedPnL = snapshot.realizedPnL
+	e.rules = snapshot.rules
+	e.currentMarketProfile = snapshot.currentMarketProfile
 	e.currentSession = snapshot.currentSession
 	e.auditEvents = snapshot.auditEvents
 	e.feesPaid = snapshot.feesPaid
@@ -515,13 +621,16 @@ func (e *Engine) restoreLockedState(snapshot engineStateSnapshot) {
 	e.maxDrawdown = snapshot.maxDrawdown
 	e.timeline = snapshot.timeline
 	e.lastOrderAt = snapshot.lastOrderAt
+	e.pendingExecutions = snapshot.pendingExecutions
 	e.processedSignals = snapshot.processedSignals
 }
 
 func deriveLastTradePrices(orders []PaperOrder) map[string]float64 {
 	lastTradePrices := make(map[string]float64)
 	for _, order := range orders {
-		lastTradePrices[order.Symbol] = order.Price
+		if order.Quantity > 0 && order.Price > 0 {
+			lastTradePrices[order.Symbol] = order.Price
+		}
 	}
 	return lastTradePrices
 }

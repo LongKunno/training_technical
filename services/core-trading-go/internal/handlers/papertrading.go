@@ -368,7 +368,9 @@ func NewPaperTimelineStreamHandler(engine paperTradingEngine) http.HandlerFunc {
 		subscription, unsubscribe := engine.SubscribeTimeline()
 		defer unsubscribe()
 
-		fmt.Fprint(w, ": connected\n\n")
+		if _, err := fmt.Fprint(w, ": connected\n\n"); err != nil {
+			return
+		}
 		flusher.Flush()
 
 		for {
@@ -383,7 +385,9 @@ func NewPaperTimelineStreamHandler(engine paperTradingEngine) http.HandlerFunc {
 				if err != nil {
 					continue
 				}
-				fmt.Fprintf(w, "event: timeline\ndata: %s\n\n", payload)
+				if _, err := fmt.Fprintf(w, "event: timeline\ndata: %s\n\n", payload); err != nil {
+					return
+				}
 				flusher.Flush()
 			}
 		}
@@ -558,6 +562,8 @@ func writePaperTradingError(w http.ResponseWriter, err error) {
 		writeAPIError(w, http.StatusBadRequest, "invalid_symbol", err.Error())
 	case errors.Is(err, papertrading.ErrInvalidTimestamp):
 		writeAPIError(w, http.StatusBadRequest, "invalid_timestamp", err.Error())
+	case errors.Is(err, papertrading.ErrInvalidMarketProfile):
+		writeAPIError(w, http.StatusBadRequest, "invalid_market_profile", err.Error())
 	case errors.Is(err, papertrading.ErrInvalidLimit):
 		writeAPIError(w, http.StatusBadRequest, "invalid_limit", err.Error())
 	case errors.Is(err, papertrading.ErrInvalidOffset):

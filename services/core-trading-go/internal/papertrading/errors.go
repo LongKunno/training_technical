@@ -11,6 +11,7 @@ var (
 	ErrInvalidNotional          = errors.New("invalid notional")
 	ErrInvalidSymbol            = errors.New("invalid symbol")
 	ErrInvalidTimestamp         = errors.New("invalid timestamp")
+	ErrInvalidMarketProfile     = errors.New("invalid market profile")
 	ErrInvalidLimit             = errors.New("invalid limit")
 	ErrInvalidOffset            = errors.New("invalid offset")
 	ErrInvalidOrderSide         = errors.New("invalid order side")

@@ -8,6 +8,8 @@ type JsonValue =
   | JsonValue[]
   | { [key: string]: JsonValue };
 
+type MockHealthState = "healthy" | "degraded" | "down";
+
 async function fulfillJson(route: Route, payload: JsonValue, status = 200) {
   await route.fulfill({
     contentType: "application/json",
@@ -94,6 +96,51 @@ export async function mockJson(page: Page, pattern: string | RegExp, payload: Js
   await page.route(pattern, async (route) => {
     await fulfillJson(route, payload);
   });
+}
+
+async function mockHealthEndpoint(
+  page: Page,
+  pattern: string | RegExp,
+  service: string,
+  state: MockHealthState,
+) {
+  await page.route(pattern, async (route) => {
+    if (state === "down") {
+      await fulfillJson(
+        route,
+        {
+          error: {
+            code: "upstream_unavailable",
+            message: `${service} is unavailable.`,
+          },
+        },
+        503,
+      );
+      return;
+    }
+
+    await fulfillJson(route, {
+      message: state === "healthy" ? `${service} is healthy.` : `${service} is degraded.`,
+      service,
+      status: state === "healthy" ? "ok" : "degraded",
+    });
+  });
+}
+
+export async function mockPlatformHealth(
+  page: Page,
+  options: {
+    core?: MockHealthState;
+    data?: MockHealthState;
+  } = {},
+) {
+  await mockHealthEndpoint(page, "**/core/health", "Core Trading (Go)", options.core ?? "healthy");
+  await mockHealthEndpoint(
+    page,
+    "**/data/health",
+    "Data Pipeline (Python)",
+    options.data ?? "healthy",
+  );
 }
 
 export async function mockJsonHandler(

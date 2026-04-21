@@ -1,0 +1,47 @@
+{{- if .Values.podDisruptionBudget.coreTrading.enabled }}
+apiVersion: policy/v1
+kind: PodDisruptionBudget
+metadata:
+  name: {{ include "crypto-simulator.coreTradingServiceName" . }}
+  labels:
+    {{- include "crypto-simulator.labels" . | nindent 4 }}
+    app.kubernetes.io/component: core-trading
+spec:
+  minAvailable: {{ .Values.podDisruptionBudget.coreTrading.minAvailable }}
+  selector:
+    matchLabels:
+      {{- include "crypto-simulator.selectorLabels" . | nindent 6 }}
+      app.kubernetes.io/component: core-trading
+{{- end }}
+{{- if .Values.podDisruptionBudget.dataPipeline.enabled }}
+---
+apiVersion: policy/v1
+kind: PodDisruptionBudget
+metadata:
+  name: {{ include "crypto-simulator.dataPipelineServiceName" . }}
+  labels:
+    {{- include "crypto-simulator.labels" . | nindent 4 }}
+    app.kubernetes.io/component: data-pipeline
+spec:
+  minAvailable: {{ .Values.podDisruptionBudget.dataPipeline.minAvailable }}
+  selector:
+    matchLabels:
+      {{- include "crypto-simulator.selectorLabels" . | nindent 6 }}
+      app.kubernetes.io/component: data-pipeline
+{{- end }}
+{{- if .Values.podDisruptionBudget.simulatorUi.enabled }}
+---
+apiVersion: policy/v1
+kind: PodDisruptionBudget
+metadata:
+  name: {{ include "crypto-simulator.simulatorUiServiceName" . }}
+  labels:
+    {{- include "crypto-simulator.labels" . | nindent 4 }}
+    app.kubernetes.io/component: simulator-ui
+spec:
+  minAvailable: {{ .Values.podDisruptionBudget.simulatorUi.minAvailable }}
+  selector:
+    matchLabels:
+      {{- include "crypto-simulator.selectorLabels" . | nindent 6 }}
+      app.kubernetes.io/component: simulator-ui
+{{- end }}

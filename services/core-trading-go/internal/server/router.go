@@ -5,6 +5,7 @@ import (
 
 	"crypto_simulator/core_trading/internal/handlers"
 	"crypto_simulator/core_trading/internal/papertrading"
+	"crypto_simulator/core_trading/internal/simulation"
 )
 
 const (
@@ -12,7 +13,7 @@ const (
 	defaultMessage     = "Sieu toc do phan tich gia!"
 )
 
-func NewRouter(engine *papertrading.Engine) http.Handler {
+func NewRouter(engine *papertrading.Engine, simService *simulation.Service) http.Handler {
 	mux := http.NewServeMux()
 	mux.HandleFunc("/health", handlers.NewHealthHandler(defaultServiceName, defaultMessage))
 	mux.HandleFunc("/api/paper/account", handlers.NewPaperAccountHandler(engine))
@@ -31,6 +32,20 @@ func NewRouter(engine *papertrading.Engine) http.Handler {
 	mux.HandleFunc("/api/paper/orders", handlers.NewPaperOrderHandler(engine))
 	mux.HandleFunc("/internal/signals", handlers.NewInternalSignalHandler(engine))
 	mux.HandleFunc("/internal/market/prices", handlers.NewMarketPriceIngestHandler(engine))
+	if simService != nil {
+		mux.HandleFunc("/api/sim/bots", handlers.NewSimulationBotsHandler(simService))
+		mux.HandleFunc("GET /api/sim/bots/{botID}", handlers.NewSimulationBotDetailHandler(simService))
+		mux.HandleFunc("/api/sim/runs", handlers.NewSimulationRunsHandler(simService))
+		mux.HandleFunc("/api/sim/experiments", handlers.NewSimulationExperimentsHandler(simService))
+		mux.HandleFunc("/api/sim/leaderboard", handlers.NewSimulationLeaderboardHandler(simService))
+		mux.HandleFunc("GET /api/sim/experiments/{experimentID}", handlers.NewSimulationExperimentDetailHandler(simService))
+		mux.HandleFunc("GET /api/sim/experiments/{experimentID}/summary", handlers.NewSimulationExperimentSummaryHandler(simService))
+		mux.HandleFunc("POST /api/sim/experiments/{experimentID}/stop", handlers.NewSimulationExperimentStopHandler(simService))
+		mux.HandleFunc("GET /api/sim/runs/{runID}", handlers.NewSimulationRunDetailHandler(simService))
+		mux.HandleFunc("POST /api/sim/runs/{runID}/stop", handlers.NewSimulationRunStopHandler(simService))
+		mux.HandleFunc("POST /internal/sim/runs/{runID}/status", handlers.NewSimulationRunStatusHandler(simService))
+		mux.HandleFunc("POST /internal/sim/runs/{runID}/heartbeat", handlers.NewSimulationRunHeartbeatHandler(simService))
+	}
 
 	return mux
 }

@@ -112,8 +112,8 @@ export function useCurrentTimelineStream(
           return;
         }
 
-        setStatus("error");
-        useOperatorUiStore.setState({ timelineStreamStatus: "error" });
+        setStatus("degraded");
+        useOperatorUiStore.setState({ timelineStreamStatus: "degraded" });
         eventSource?.close();
         scheduleReconnect();
       };

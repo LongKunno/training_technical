@@ -480,6 +480,12 @@ func TestNewEngineFromPersistentStateRestoresState(t *testing.T) {
 				Timestamp: time.Date(2026, 4, 17, 1, 0, 0, 0, time.UTC),
 			},
 		},
+	}, papertrading.SessionExecutionProfile{
+		InitialBalance: 1000,
+		Rules: papertrading.SimulationRules{
+			FeeRate:      0.001,
+			SlippageRate: 0.002,
+		},
 	}, nil)
 	if err != nil {
 		t.Fatalf("failed to restore engine: %v", err)
@@ -686,6 +692,9 @@ func TestNewEngineFromPersistentStateRestoresSessionRuntime(t *testing.T) {
 		},
 		PeakEquity:       1015,
 		ProcessedSignals: []string{"sig-1"},
+	}, papertrading.SessionExecutionProfile{
+		InitialBalance: 1000,
+		Rules:          papertrading.SimulationRules{},
 	}, nil)
 	if err != nil {
 		t.Fatalf("failed to restore engine: %v", err)

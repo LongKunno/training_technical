@@ -41,6 +41,15 @@ export const SessionsIcon = createIcon(
   </>,
 );
 
+export const RunsIcon = createIcon(
+  <>
+    <path d="M4 18V6" />
+    <path d="M4 18h16" />
+    <path d="m7 14 3-4 3 2 4-5" />
+    <path d="M15 7h2v2" />
+  </>,
+);
+
 export const LabIcon = createIcon(
   <>
     <path d="M10 3v5l-5.5 9.5A2 2 0 0 0 6.2 21h11.6a2 2 0 0 0 1.7-3.5L14 8V3" />

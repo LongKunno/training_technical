@@ -1,0 +1,18 @@
+{{- if eq .Values.exposure.mode "ingress" }}
+Local entrypoint:
+
+  http://{{ .Values.ingress.host }}:18020
+{{- else if eq .Values.exposure.mode "nodePort" }}
+Local entrypoint:
+
+  http://localhost:18021
+{{- else if eq .Values.exposure.mode "loadBalancer" }}
+LoadBalancer entrypoint:
+
+  kubectl -n {{ .Release.Namespace }} get svc {{ include "crypto-simulator.simulatorUiServiceName" . }}
+{{- end }}
+
+Backend traffic stays same-origin through:
+
+  /core/* -> core-trading
+  /data/* -> data-pipeline

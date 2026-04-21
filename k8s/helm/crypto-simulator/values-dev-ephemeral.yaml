@@ -1,0 +1,21 @@
+postgres:
+  persistence:
+    enabled: false
+    existingClaim: ""
+
+kafka:
+  persistence:
+    enabled: false
+    existingClaim: ""
+
+podDisruptionBudget:
+  coreTrading:
+    enabled: false
+  dataPipeline:
+    enabled: false
+  simulatorUi:
+    enabled: false
+
+autoscaling:
+  dataPipeline:
+    enabled: false

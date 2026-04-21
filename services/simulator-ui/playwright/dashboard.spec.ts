@@ -1,9 +1,17 @@
 import { expect, test } from "@playwright/test";
 
-import { getEventSourceUrls, installEventSourceMock, mockJson } from "./support";
+import {
+  fulfillJson,
+  getEventSourceUrls,
+  installEventSourceMock,
+  mockJson,
+  mockJsonHandler,
+  mockPlatformHealth,
+} from "./support";
 
 test("dashboard mounts current-session SSE and renders live monitor data", async ({ page }) => {
   await installEventSourceMock(page);
+  await mockPlatformHealth(page);
 
   await mockJson(page, "**/core/api/paper/session", {
     session: {
@@ -152,4 +160,33 @@ test("dashboard mounts current-session SSE and renders live monitor data", async
   await expect
     .poll(async () => getEventSourceUrls(page))
     .toEqual(["/core/api/paper/timeline/stream"]);
+});
+
+test("dashboard surfaces core-down degraded copy when the current snapshot cannot load", async ({
+  page,
+}) => {
+  await installEventSourceMock(page);
+  await mockPlatformHealth(page, { core: "down" });
+
+  await mockJsonHandler(page, "**/core/api/paper/**", async (route) => {
+    await fulfillJson(
+      route,
+      {
+        error: {
+          code: "upstream_unavailable",
+          message: "Core Trading (Go) is unavailable.",
+        },
+      },
+      503,
+    );
+  });
+
+  await page.goto("/dashboard");
+
+  await expect(page.getByRole("heading", { name: "Current-session live monitor" })).toBeVisible();
+  await expect(page.getByRole("heading", { name: "Core trading API unavailable" }).first()).toBeVisible();
+  await expect(page.getByText("The dashboard could not reach", { exact: false }).first()).toBeVisible();
+  await expect
+    .poll(async () => getEventSourceUrls(page))
+    .toEqual([]);
 });

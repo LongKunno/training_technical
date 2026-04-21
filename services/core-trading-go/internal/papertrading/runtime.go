@@ -35,6 +35,7 @@ func (e *Engine) bootstrapRuntimeState(now time.Time) {
 	e.maxDrawdown = 0
 	e.timeline = nil
 	e.lastOrderAt = make(map[string]time.Time)
+	e.pendingExecutions = nil
 	e.processedSignals = make(map[string]struct{})
 
 	for _, order := range e.orders {
@@ -67,6 +68,8 @@ func (e *Engine) restoreRuntimeState(state PersistentState, now time.Time) {
 	e.currentSession = state.Session
 	e.auditEvents = cloneAuditEvents(state.AuditEvents)
 	e.lastOrderAt = deriveLastOrderTimes(state.Orders)
+	e.currentMarketProfile = cloneMarketExecutionProfile(state.MarketProfile)
+	e.pendingExecutions = clonePendingExecutions(state.PendingExecutions)
 	e.processedSignals = make(map[string]struct{}, len(state.ProcessedSignals))
 	for _, signalID := range state.ProcessedSignals {
 		e.processedSignals[signalID] = struct{}{}
@@ -94,6 +97,15 @@ func (e *Engine) restoreRuntimeState(state PersistentState, now time.Time) {
 	e.timeline = cloneTimelinePoints(report.Timeline)
 }
 
+func (e *Engine) StartSessionWithProfile(sessionID string, profile SessionExecutionProfile) (SimulationSession, error) {
+	e.mu.Lock()
+	defer e.mu.Unlock()
+
+	return e.startSessionLocked(sessionID, profile, map[string]any{
+		"source": "simulation-run",
+	})
+}
+
 func (e *Engine) buildPersistentStateLocked() PersistentState {
 	processedSignals := make([]string, 0, len(e.processedSignals))
 	for signalID := range e.processedSignals {
@@ -102,17 +114,19 @@ func (e *Engine) buildPersistentStateLocked() PersistentState {
 	slices.Sort(processedSignals)
 
 	return PersistentState{
-		Account:          cloneAccount(e.account),
-		InitialBalance:   e.initialBalance,
-		RealizedPnL:      e.realizedPnL,
-		Rules:            e.rules,
-		Orders:           cloneOrders(e.orders),
-		MarketPrices:     cloneMarketPrices(e.markPrices),
-		Session:          e.currentSession,
-		AuditEvents:      cloneAuditEvents(e.auditEvents),
-		Report:           e.buildSessionReportLocked(),
-		PeakEquity:       e.peakEquity,
-		ProcessedSignals: processedSignals,
+		Account:           cloneAccount(e.account),
+		InitialBalance:    e.initialBalance,
+		RealizedPnL:       e.realizedPnL,
+		Rules:             e.rules,
+		MarketProfile:     cloneMarketExecutionProfile(e.currentMarketProfile),
+		Orders:            cloneOrders(e.orders),
+		PendingExecutions: clonePendingExecutions(e.pendingExecutions),
+		MarketPrices:      cloneMarketPrices(e.markPrices),
+		Session:           e.currentSession,
+		AuditEvents:       cloneAuditEvents(e.auditEvents),
+		Report:            e.buildSessionReportLocked(),
+		PeakEquity:        e.peakEquity,
+		ProcessedSignals:  processedSignals,
 	}
 }
 
@@ -188,30 +202,13 @@ func (e *Engine) StartSession(sessionID string) (SimulationSession, error) {
 	e.mu.Lock()
 	defer e.mu.Unlock()
 
-	previousState := e.snapshotLockedState()
-	now := time.Now().UTC()
-	if strings.TrimSpace(sessionID) == "" {
-		sessionID = newSessionID(now)
-	}
-
-	e.resetTradingStateLocked()
-	e.currentSession = SimulationSession{
-		ID:          sessionID,
-		Status:      SessionStatusRunning,
-		StartedAt:   now,
-		LastEventAt: now,
-	}
-	e.appendAuditLocked("session_started", "simulation session started", "", now, map[string]any{
+	return e.startSessionLocked(sessionID, SessionExecutionProfile{
+		InitialBalance: e.defaultBalance,
+		Rules:          cloneSimulationRules(e.defaultRules),
+		MarketProfile:  MarketExecutionProfile{},
+	}, map[string]any{
 		"source": "manual-start",
 	})
-	e.appendTimelinePointLocked(now, "session_started")
-
-	if err := e.persistLocked(); err != nil {
-		e.restoreLockedState(previousState)
-		return SimulationSession{}, err
-	}
-
-	return e.currentSession, nil
 }
 
 func (e *Engine) ResetSession() (SimulationSession, error) {
@@ -247,6 +244,41 @@ func (e *Engine) ResetSession() (SimulationSession, error) {
 	return e.currentSession, nil
 }
 
+func (e *Engine) startSessionLocked(sessionID string, profile SessionExecutionProfile, details map[string]any) (SimulationSession, error) {
+	previousState := e.snapshotLockedState()
+	now := time.Now().UTC()
+	if strings.TrimSpace(sessionID) == "" {
+		sessionID = newSessionID(now)
+	}
+
+	if err := validateEngineBootstrap(e.account.ID, profile.InitialBalance, profile.Rules); err != nil {
+		return SimulationSession{}, err
+	}
+	if err := validateMarketExecutionProfile(profile.MarketProfile); err != nil {
+		return SimulationSession{}, err
+	}
+
+	e.initialBalance = profile.InitialBalance
+	e.rules = cloneSimulationRules(profile.Rules)
+	e.currentMarketProfile = cloneMarketExecutionProfile(profile.MarketProfile)
+	e.resetTradingStateLocked()
+	e.currentSession = SimulationSession{
+		ID:          sessionID,
+		Status:      SessionStatusRunning,
+		StartedAt:   now,
+		LastEventAt: now,
+	}
+	e.appendAuditLocked("session_started", "simulation session started", "", now, details)
+	e.appendTimelinePointLocked(now, "session_started")
+
+	if err := e.persistLocked(); err != nil {
+		e.restoreLockedState(previousState)
+		return SimulationSession{}, err
+	}
+
+	return e.currentSession, nil
+}
+
 func (e *Engine) StopSession() (SimulationSession, error) {
 	e.mu.Lock()
 	defer e.mu.Unlock()
@@ -257,6 +289,7 @@ func (e *Engine) StopSession() (SimulationSession, error) {
 
 	previousState := e.snapshotLockedState()
 	now := time.Now().UTC()
+	e.finalizePendingExecutionsForSessionStopLocked(now)
 	e.currentSession.Status = SessionStatusStopped
 	e.currentSession.StoppedAt = &now
 	e.touchSessionLocked(now)
@@ -388,10 +421,22 @@ func (e *Engine) ProcessSignal(signal SignalV1) (SignalExecution, error) {
 	e.mu.Lock()
 	defer e.mu.Unlock()
 
+	previousState := e.snapshotLockedState()
+	details := map[string]any{
+		"source":      "signal",
+		"strategy_id": signal.StrategyID,
+		"signal_id":   signal.SignalID,
+		"run_id":      signal.RunID,
+		"bot_id":      signal.BotID,
+		"bot_version": signal.BotVersion,
+	}
 	e.appendAuditLocked("signal_received", "signal received", signal.Symbol, signal.Timestamp, map[string]any{
 		"strategy_id": signal.StrategyID,
 		"signal_id":   signal.SignalID,
 		"side":        signal.Side,
+		"run_id":      signal.RunID,
+		"bot_id":      signal.BotID,
+		"bot_version": signal.BotVersion,
 	})
 
 	if _, exists := e.processedSignals[signal.SignalID]; exists {
@@ -405,28 +450,73 @@ func (e *Engine) ProcessSignal(signal SignalV1) (SignalExecution, error) {
 		return SignalExecution{}, err
 	}
 
-	order, err := e.placeMarketOrderLocked(PlaceOrderRequest{
-		Symbol:   signal.Symbol,
-		Side:     signal.Side,
-		Quantity: quantity,
-		Price:    priceHint,
-	}, map[string]any{
-		"source":      "signal",
-		"strategy_id": signal.StrategyID,
-		"signal_id":   signal.SignalID,
-	})
-	if err != nil {
-		e.rejectSignalLocked(signal, err)
-		return SignalExecution{}, err
+	reservedOrderID := fmt.Sprintf("paper-order-%d", e.orderCounter+1)
+	pending := PendingExecution{
+		OrderID:               reservedOrderID,
+		SignalID:              signal.SignalID,
+		StrategyID:            signal.StrategyID,
+		RunID:                 signal.RunID,
+		BotID:                 signal.BotID,
+		BotVersion:            signal.BotVersion,
+		Symbol:                signal.Symbol,
+		Side:                  signal.Side,
+		RequestedQuantity:     quantity,
+		RequestedNotional:     signal.Notional,
+		RequestedPrice:        priceHint,
+		RemainingQuantity:     quantity,
+		RemainingLatencyTicks: e.currentMarketProfile.SignalLatencyTicks,
+		CreatedAt:             signal.Timestamp,
+		Details:               cloneDetails(details),
+	}
+	if pending.RequestedNotional <= 0 {
+		pending.RequestedNotional = quantity * priceHint
 	}
 
+	var order *PaperOrder
+	if pending.RemainingLatencyTicks == 0 {
+		marketPrice := e.currentMarketPriceLocked(signal.Symbol)
+		if marketPrice <= 0 {
+			marketPrice = priceHint
+		}
+		order, err = e.processPendingExecutionSliceLocked(&pending, marketPrice, signal.Timestamp)
+		if err != nil {
+			e.restoreLockedState(previousState)
+			e.rejectSignalLocked(signal, err)
+			return SignalExecution{}, err
+		}
+		if pending.RemainingQuantity > 0 {
+			e.pendingExecutions = append(e.pendingExecutions, pending)
+		}
+	} else {
+		e.pendingExecutions = append(e.pendingExecutions, pending)
+		e.appendAuditLocked("signal_queued", "signal queued for execution", signal.Symbol, signal.Timestamp, map[string]any{
+			"signal_id":               signal.SignalID,
+			"strategy_id":             signal.StrategyID,
+			"side":                    signal.Side,
+			"requested_quantity":      quantity,
+			"requested_price":         priceHint,
+			"remaining_latency_ticks": pending.RemainingLatencyTicks,
+			"run_id":                  signal.RunID,
+			"bot_id":                  signal.BotID,
+			"bot_version":             signal.BotVersion,
+		})
+	}
+
+	e.orderCounter++
 	e.processedSignals[signal.SignalID] = struct{}{}
+	if err := e.persistLocked(); err != nil {
+		e.restoreLockedState(previousState)
+		return SignalExecution{}, err
+	}
 
 	return SignalExecution{
 		SignalID:      signal.SignalID,
 		StrategyID:    signal.StrategyID,
+		RunID:         signal.RunID,
+		BotID:         signal.BotID,
+		BotVersion:    signal.BotVersion,
 		Status:        "accepted",
-		Order:         &order,
+		Order:         order,
 		DerivedPrice:  priceHint,
 		DerivedAmount: quantity,
 	}, nil
@@ -463,24 +553,28 @@ func (e *Engine) placeMarketOrderLocked(request PlaceOrderRequest, extraDetails 
 
 	e.orderCounter++
 	order := PaperOrder{
-		ID:             fmt.Sprintf("paper-order-%d", e.orderCounter),
-		AccountID:      e.account.ID,
-		Symbol:         request.Symbol,
-		Side:           request.Side,
-		Quantity:       request.Quantity,
-		Price:          executionPrice,
-		RequestedPrice: request.Price,
-		Notional:       notional,
-		Fee:            fee,
-		FeeRate:        e.rules.FeeRate,
-		SlippageRate:   e.rules.SlippageRate,
-		Status:         "filled",
-		ExecutedAt:     executedAt,
+		ID:                fmt.Sprintf("paper-order-%d", e.orderCounter),
+		AccountID:         e.account.ID,
+		Symbol:            request.Symbol,
+		Side:              request.Side,
+		Quantity:          request.Quantity,
+		RequestedQuantity: request.Quantity,
+		Price:             executionPrice,
+		RequestedPrice:    request.Price,
+		Notional:          notional,
+		RequestedNotional: request.Quantity * request.Price,
+		Fee:               fee,
+		FeeRate:           e.rules.FeeRate,
+		SlippageRate:      e.rules.SlippageRate,
+		FillCount:         1,
+		RemainingQuantity: 0,
+		Status:            "filled",
+		ExecutedAt:        executedAt,
 	}
 
 	e.lastTradePrices[request.Symbol] = executionPrice
 	e.orders = append(e.orders, order)
-	e.noteFilledOrderLocked(order, extraDetails)
+	e.noteFilledOrderLocked(&e.orders[len(e.orders)-1], request.Quantity, fee, executionPrice, true, "order_filled", "paper order filled", extraDetails)
 	e.updateDrawdownLocked()
 	e.appendTimelinePointLocked(order.ExecutedAt, "order_filled")
 
@@ -527,6 +621,19 @@ func validateSignal(signal SignalV1) error {
 	return nil
 }
 
+func validateMarketExecutionProfile(profile MarketExecutionProfile) error {
+	if profile.SignalLatencyTicks < 0 {
+		return ErrInvalidMarketProfile
+	}
+	if profile.SpreadBps < 0 {
+		return ErrInvalidMarketProfile
+	}
+	if profile.MaxFillNotionalPerTick < 0 {
+		return ErrInvalidMarketProfile
+	}
+	return nil
+}
+
 func (e *Engine) deriveSignalOrderLocked(signal SignalV1) (float64, float64, error) {
 	priceHint := signal.PriceHint
 	if priceHint == 0 {
@@ -553,32 +660,238 @@ func (e *Engine) rejectSignalLocked(signal SignalV1, err error) {
 		"strategy_id": signal.StrategyID,
 		"signal_id":   signal.SignalID,
 		"side":        signal.Side,
+		"run_id":      signal.RunID,
+		"bot_id":      signal.BotID,
+		"bot_version": signal.BotVersion,
 	})
 }
 
-func (e *Engine) noteFilledOrderLocked(order PaperOrder, extraDetails map[string]any) {
+func (e *Engine) noteFilledOrderLocked(order *PaperOrder, fillQuantity float64, fillFee float64, fillPrice float64, firstFill bool, eventType string, message string, extraDetails map[string]any) {
 	e.lastOrderAt[order.Symbol] = order.ExecutedAt
-	e.feesPaid += order.Fee
-	e.slippageCost += orderSlippageCost(order)
-	e.filledOrders++
+	e.feesPaid += fillFee
+	e.slippageCost += abs(fillPrice-order.RequestedPrice) * fillQuantity
+	if firstFill {
+		e.filledOrders++
+	}
 
 	metrics := e.symbolStats[order.Symbol]
-	metrics.FilledOrders++
-	metrics.FeesPaid += order.Fee
+	if firstFill {
+		metrics.FilledOrders++
+	}
+	metrics.FeesPaid += fillFee
 	e.symbolStats[order.Symbol] = metrics
 
 	details := map[string]any{
-		"side":            order.Side,
-		"quantity":        order.Quantity,
-		"price":           order.Price,
-		"requested_price": order.RequestedPrice,
-		"fee":             order.Fee,
+		"order_id":            order.ID,
+		"side":                order.Side,
+		"quantity":            fillQuantity,
+		"cumulative_quantity": order.Quantity,
+		"remaining_quantity":  order.RemainingQuantity,
+		"price":               fillPrice,
+		"average_fill_price":  order.Price,
+		"requested_price":     order.RequestedPrice,
+		"fee":                 fillFee,
+		"fill_count":          order.FillCount,
 	}
 	for key, value := range extraDetails {
 		details[key] = value
 	}
 
-	e.appendAuditLocked("order_filled", "paper order filled", order.Symbol, order.ExecutedAt, details)
+	e.appendAuditLocked(eventType, message, order.Symbol, order.ExecutedAt, details)
+}
+
+func (e *Engine) processPendingExecutionSliceLocked(execution *PendingExecution, marketPrice float64, timestamp time.Time) (*PaperOrder, error) {
+	executionPrice := e.applyExecutionPrice(execution.Side, marketPrice)
+	fillQuantity := e.maxFillQuantityForTick(execution.RemainingQuantity, executionPrice)
+	if fillQuantity <= 0 {
+		return nil, ErrInvalidQuantity
+	}
+
+	request := PlaceOrderRequest{
+		Symbol:   execution.Symbol,
+		Side:     execution.Side,
+		Quantity: fillQuantity,
+		Price:    marketPrice,
+	}
+	if err := e.validateOrderGuardsLocked(request, executionPrice, timestamp); err != nil {
+		if index := e.findOrderIndexByIDLocked(execution.OrderID); index >= 0 {
+			e.finalizeOrderLocked(&e.orders[index], "stopped", err.Error(), timestamp, "order_fill_stopped", "paper order stopped before full fill", execution.Details)
+			return &e.orders[index], nil
+		}
+		return nil, err
+	}
+
+	index, firstFill := e.ensurePendingOrderLocked(*execution, timestamp)
+	order := &e.orders[index]
+	fillNotional := fillQuantity * executionPrice
+	fillFee := fillNotional * e.rules.FeeRate
+
+	switch execution.Side {
+	case OrderSideBuy:
+		totalDebit := fillNotional + fillFee
+		e.account.CashBalance -= totalDebit
+		e.applyBuy(execution.Symbol, fillQuantity, executionPrice, fillFee)
+	case OrderSideSell:
+		realizedPnL, err := e.applySell(execution.Symbol, fillQuantity, executionPrice, fillFee)
+		if err != nil {
+			if firstFill {
+				e.orders = append(e.orders[:index], e.orders[index+1:]...)
+				return nil, err
+			}
+			e.finalizeOrderLocked(order, "stopped", err.Error(), timestamp, "order_fill_stopped", "paper order stopped before full fill", execution.Details)
+			return order, nil
+		}
+		e.account.CashBalance += fillNotional - fillFee
+		e.realizedPnL += realizedPnL
+	default:
+		return nil, ErrInvalidOrderSide
+	}
+
+	order.Quantity += fillQuantity
+	order.Notional += fillNotional
+	order.Fee += fillFee
+	order.FillCount++
+	order.Price = order.Notional / order.Quantity
+	order.ExecutedAt = timestamp
+	e.lastTradePrices[execution.Symbol] = executionPrice
+
+	execution.RemainingQuantity -= fillQuantity
+	if execution.RemainingQuantity < 1e-9 {
+		execution.RemainingQuantity = 0
+	}
+	order.RemainingQuantity = execution.RemainingQuantity
+
+	eventType := "order_partial_fill"
+	message := "paper order partially filled"
+	if execution.RemainingQuantity == 0 {
+		order.Status = "filled"
+		order.TerminalReason = ""
+		eventType = "order_filled"
+		message = "paper order filled"
+	} else {
+		order.Status = "partially_filled"
+	}
+
+	e.noteFilledOrderLocked(order, fillQuantity, fillFee, executionPrice, firstFill, eventType, message, execution.Details)
+	e.updateDrawdownLocked()
+	e.appendTimelinePointLocked(timestamp, eventType)
+	return order, nil
+}
+
+func (e *Engine) ensurePendingOrderLocked(execution PendingExecution, timestamp time.Time) (int, bool) {
+	if index := e.findOrderIndexByIDLocked(execution.OrderID); index >= 0 {
+		return index, false
+	}
+
+	e.orders = append(e.orders, PaperOrder{
+		ID:                execution.OrderID,
+		AccountID:         e.account.ID,
+		Symbol:            execution.Symbol,
+		Side:              execution.Side,
+		Quantity:          0,
+		RequestedQuantity: execution.RequestedQuantity,
+		Price:             0,
+		RequestedPrice:    execution.RequestedPrice,
+		Notional:          0,
+		RequestedNotional: execution.RequestedNotional,
+		Fee:               0,
+		FeeRate:           e.rules.FeeRate,
+		SlippageRate:      e.rules.SlippageRate,
+		FillCount:         0,
+		RemainingQuantity: execution.RequestedQuantity,
+		Status:            "pending",
+		ExecutedAt:        timestamp,
+	})
+	return len(e.orders) - 1, true
+}
+
+func (e *Engine) findOrderIndexByIDLocked(orderID string) int {
+	for index := range e.orders {
+		if e.orders[index].ID == orderID {
+			return index
+		}
+	}
+	return -1
+}
+
+func (e *Engine) finalizeOrderLocked(order *PaperOrder, status string, reason string, timestamp time.Time, eventType string, message string, extraDetails map[string]any) {
+	order.Status = status
+	order.TerminalReason = strings.TrimSpace(reason)
+	order.ExecutedAt = timestamp
+
+	details := map[string]any{
+		"order_id":            order.ID,
+		"side":                order.Side,
+		"cumulative_quantity": order.Quantity,
+		"remaining_quantity":  order.RemainingQuantity,
+		"requested_price":     order.RequestedPrice,
+		"terminal_reason":     order.TerminalReason,
+	}
+	for key, value := range extraDetails {
+		details[key] = value
+	}
+
+	e.appendAuditLocked(eventType, message, order.Symbol, timestamp, details)
+	e.appendTimelinePointLocked(timestamp, eventType)
+}
+
+func (e *Engine) finalizePendingExecutionsForSessionStopLocked(timestamp time.Time) {
+	if len(e.pendingExecutions) == 0 {
+		return
+	}
+
+	for _, execution := range e.pendingExecutions {
+		if index := e.findOrderIndexByIDLocked(execution.OrderID); index >= 0 {
+			e.finalizeOrderLocked(&e.orders[index], "stopped", "session_stopped", timestamp, "order_fill_stopped", "paper order stopped before full fill", execution.Details)
+			continue
+		}
+		e.rejectSignalLocked(SignalV1{
+			StrategyID: execution.StrategyID,
+			SignalID:   execution.SignalID,
+			RunID:      execution.RunID,
+			BotID:      execution.BotID,
+			BotVersion: execution.BotVersion,
+			Symbol:     execution.Symbol,
+			Side:       execution.Side,
+			Quantity:   execution.RequestedQuantity,
+			Notional:   execution.RequestedNotional,
+			PriceHint:  execution.RequestedPrice,
+			Timestamp:  execution.CreatedAt,
+		}, ErrSessionStopped)
+	}
+	e.pendingExecutions = nil
+}
+
+func (e *Engine) applyExecutionPrice(side OrderSide, marketPrice float64) float64 {
+	spreadMultiplier := e.currentMarketProfile.SpreadBps / 20000
+	switch side {
+	case OrderSideBuy:
+		return e.applySlippage(side, marketPrice*(1+spreadMultiplier))
+	case OrderSideSell:
+		return e.applySlippage(side, marketPrice*(1-spreadMultiplier))
+	default:
+		return e.applySlippage(side, marketPrice)
+	}
+}
+
+func (e *Engine) maxFillQuantityForTick(remainingQuantity float64, executionPrice float64) float64 {
+	if remainingQuantity <= 0 {
+		return 0
+	}
+	if executionPrice <= 0 {
+		return 0
+	}
+	if e.currentMarketProfile.MaxFillNotionalPerTick <= 0 {
+		return remainingQuantity
+	}
+	maxQuantity := e.currentMarketProfile.MaxFillNotionalPerTick / executionPrice
+	if maxQuantity <= 0 {
+		return 0
+	}
+	if maxQuantity < remainingQuantity {
+		return maxQuantity
+	}
+	return remainingQuantity
 }
 
 func (e *Engine) validateOrderGuardsLocked(request PlaceOrderRequest, executionPrice float64, now time.Time) error {
@@ -615,6 +928,18 @@ func (e *Engine) validateOrderGuardsLocked(request PlaceOrderRequest, executionP
 	if request.Side == OrderSideBuy && e.rules.RiskControls.MaxOpenNotional > 0 {
 		if e.currentOpenNotionalLocked()+orderNotional > e.rules.RiskControls.MaxOpenNotional {
 			return ErrMaxOpenNotionalExceeded
+		}
+	}
+	if request.Side == OrderSideBuy {
+		totalDebit := orderNotional + (orderNotional * e.rules.FeeRate)
+		if e.account.CashBalance < totalDebit {
+			return ErrInsufficientFunds
+		}
+	}
+	if request.Side == OrderSideSell {
+		position, exists := e.account.Positions[request.Symbol]
+		if !exists || position.Quantity < request.Quantity {
+			return ErrInsufficientAsset
 		}
 	}
 
@@ -740,6 +1065,7 @@ func (e *Engine) resetTradingStateLocked() {
 	e.lastTradePrices = make(map[string]float64)
 	e.markPrices = make(map[string]marketdata.PriceTickV1)
 	e.realizedPnL = 0
+	e.currentMarketProfile = MarketExecutionProfile{}
 	e.auditEvents = nil
 	e.feesPaid = 0
 	e.slippageCost = 0
@@ -750,6 +1076,7 @@ func (e *Engine) resetTradingStateLocked() {
 	e.maxDrawdown = 0
 	e.timeline = nil
 	e.lastOrderAt = make(map[string]time.Time)
+	e.pendingExecutions = nil
 	e.processedSignals = make(map[string]struct{})
 }
 
@@ -818,6 +1145,14 @@ func cloneRiskControls(input RiskControls) RiskControls {
 		MaxDailyLoss:        input.MaxDailyLoss,
 		CooldownSeconds:     input.CooldownSeconds,
 		MaxOpenNotional:     input.MaxOpenNotional,
+	}
+}
+
+func cloneSimulationRules(input SimulationRules) SimulationRules {
+	return SimulationRules{
+		FeeRate:      input.FeeRate,
+		SlippageRate: input.SlippageRate,
+		RiskControls: cloneRiskControls(input.RiskControls),
 	}
 }
 
@@ -900,6 +1235,9 @@ func deriveReportFromOrders(session SimulationSession, orders []PaperOrder) Sess
 	}
 	stats := make(map[string]SymbolReport)
 	for _, order := range orders {
+		if order.Quantity <= 0 {
+			continue
+		}
 		report.FilledOrders++
 		report.FeesPaid += order.Fee
 		report.SlippageCost += orderSlippageCost(order)

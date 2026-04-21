@@ -1,0 +1,16 @@
+apiVersion: v1
+kind: Service
+metadata:
+  name: {{ include "crypto-simulator.botRunnerServiceName" . }}
+  labels:
+    {{- include "crypto-simulator.labels" . | nindent 4 }}
+    app.kubernetes.io/component: bot-runner
+spec:
+  type: ClusterIP
+  selector:
+    {{- include "crypto-simulator.selectorLabels" . | nindent 4 }}
+    app.kubernetes.io/component: bot-runner
+  ports:
+    - name: http
+      port: {{ .Values.botRunner.service.port }}
+      targetPort: http

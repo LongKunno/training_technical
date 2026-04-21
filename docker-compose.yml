@@ -86,6 +86,7 @@ services:
       - PAPER_MAX_DAILY_LOSS=${PAPER_MAX_DAILY_LOSS:-0}
       - PAPER_COOLDOWN_SECONDS=${PAPER_COOLDOWN_SECONDS:-0}
       - PAPER_MAX_OPEN_NOTIONAL=${PAPER_MAX_OPEN_NOTIONAL:-0}
+      - BOT_RUNNER_BASE_URL=${BOT_RUNNER_BASE_URL:-http://bot_runner:8001}
       - CORE_TRADING_KAFKA_BOOTSTRAP_SERVERS=${CORE_TRADING_KAFKA_BOOTSTRAP_SERVERS:-kafka:9092}
       - CORE_TRADING_KAFKA_TOPIC=${CORE_TRADING_KAFKA_TOPIC:-price-ticks-v1}
       - CORE_TRADING_KAFKA_GROUP_ID=${CORE_TRADING_KAFKA_GROUP_ID:-core-trading-paper-engine}
@@ -127,6 +128,23 @@ services:
       core_trading:
         condition: service_started
 
+  bot_runner:
+    build:
+      context: ./services/bot-runner-py
+      dockerfile: Dockerfile.dev
+    container_name: bot_runner_py
+    volumes:
+      - ./services/bot-runner-py:/app
+    environment:
+      - CORE_TRADING_BASE_URL=${BOT_RUNNER_CORE_BASE_URL:-http://core_trading:8080}
+      - DATA_PIPELINE_BASE_URL=${BOT_RUNNER_DATA_BASE_URL:-http://data_pipeline:8000}
+      - BOT_RUNNER_REQUEST_TIMEOUT_SECONDS=${BOT_RUNNER_REQUEST_TIMEOUT_SECONDS:-5}
+    depends_on:
+      core_trading:
+        condition: service_started
+      data_pipeline:
+        condition: service_started
+
   simulator_ui:
     build:
       context: ./services/simulator-ui
@@ -134,10 +152,17 @@ services:
     container_name: simulator_ui
     ports:
       - "${SIMULATOR_UI_HOST_PORT:-18020}:80"
+    healthcheck:
+      test: ["CMD-SHELL", "wget -qO- http://127.0.0.1/health >/dev/null 2>&1"]
+      interval: 5s
+      timeout: 5s
+      retries: 24
     depends_on:
       core_trading:
         condition: service_started
       data_pipeline:
+        condition: service_started
+      bot_runner:
         condition: service_started
 
   smoke_runner:
@@ -152,7 +177,7 @@ services:
       data_pipeline:
         condition: service_started
       simulator_ui:
-        condition: service_started
+        condition: service_healthy
 
 volumes:
   postgres_data:

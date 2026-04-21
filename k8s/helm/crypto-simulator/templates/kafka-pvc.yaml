@@ -1,0 +1,17 @@
+{{- if and .Values.kafka.persistence.enabled (not .Values.kafka.persistence.existingClaim) }}
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: {{ include "crypto-simulator.kafkaClaimName" . }}
+  labels:
+    {{- include "crypto-simulator.labels" . | nindent 4 }}
+spec:
+  accessModes:
+    - ReadWriteOnce
+  resources:
+    requests:
+      storage: {{ .Values.kafka.persistence.size }}
+  {{- with .Values.kafka.persistence.storageClassName }}
+  storageClassName: {{ . }}
+  {{- end }}
+{{- end }}

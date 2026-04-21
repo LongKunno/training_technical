@@ -3,11 +3,16 @@ import { Link, useLocation, useParams } from "react-router-dom";
 
 import { ApiClientError } from "../../shared/api/http";
 import { ChartPanel, createTimelineAreaOption } from "../../shared/charts";
-import { useSelectedSessionDetailQuery } from "../../shared/query";
+import {
+  resolveServiceAvailability,
+  useCoreHealthQuery,
+  useSelectedSessionDetailQuery,
+} from "../../shared/query";
 import {
   selectSessionHistoryFilter,
   useOperatorUiStore,
 } from "../../shared/state";
+import type { UpstreamAvailability } from "../../shared/types";
 import {
   Badge,
   Button,
@@ -52,7 +57,15 @@ function LoadingGrid() {
   );
 }
 
-function getDetailErrorState(error: unknown) {
+function getDetailErrorState(error: unknown, coreAvailability: UpstreamAvailability) {
+  if (coreAvailability === "down") {
+    return {
+      description:
+        "Historical detail is read-only, but it still depends on /core/health and session-scoped /core/api/paper/* endpoints. The core service is unreachable right now.",
+      title: "Core trading API unavailable",
+    };
+  }
+
   if (error instanceof ApiClientError && error.code === "session_not_found") {
     return {
       description:
@@ -79,6 +92,8 @@ export function SessionDetailRouteView() {
   const location = useLocation();
   const sessionHistoryFilter = useOperatorUiStore(selectSessionHistoryFilter);
   const setSelectedSessionId = useOperatorUiStore((state) => state.setSelectedSessionId);
+  const coreHealthQuery = useCoreHealthQuery();
+  const coreAvailability = resolveServiceAvailability(coreHealthQuery);
   const detailQuery = useSelectedSessionDetailQuery(sessionId, {
     audit_limit: 40,
     audit_offset: 0,
@@ -97,7 +112,9 @@ export function SessionDetailRouteView() {
   const events = detailQuery.data?.events ?? [];
   const chartOption =
     timeline.length > 0 ? createTimelineAreaOption(toTimelineChartPoints(timeline)) : undefined;
-  const detailError = detailQuery.isError ? getDetailErrorState(detailQuery.error) : null;
+  const detailError = detailQuery.isError
+    ? getDetailErrorState(detailQuery.error, coreAvailability)
+    : null;
   const routeSearchParams = new URLSearchParams(location.search);
   const routeFilter = parseSessionHistorySearchParams(routeSearchParams);
   const routeSelectedSessionId = parseSelectedSessionIdSearchParam(routeSearchParams);

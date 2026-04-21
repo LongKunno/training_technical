@@ -1,0 +1,49 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: {{ include "crypto-simulator.simulatorUiServiceName" . }}
+  labels:
+    {{- include "crypto-simulator.labels" . | nindent 4 }}
+    app.kubernetes.io/component: simulator-ui
+spec:
+  minReadySeconds: {{ .Values.deploymentDefaults.minReadySeconds }}
+  revisionHistoryLimit: {{ .Values.deploymentDefaults.revisionHistoryLimit }}
+  strategy:
+    {{- toYaml .Values.deploymentDefaults.strategy | nindent 4 }}
+  replicas: {{ .Values.simulatorUi.replicaCount }}
+  selector:
+    matchLabels:
+      {{- include "crypto-simulator.selectorLabels" . | nindent 6 }}
+      app.kubernetes.io/component: simulator-ui
+  template:
+    metadata:
+      labels:
+        {{- include "crypto-simulator.selectorLabels" . | nindent 8 }}
+        app.kubernetes.io/component: simulator-ui
+    spec:
+      containers:
+        - name: simulator-ui
+          image: "{{ .Values.simulatorUi.image.repository }}:{{ .Values.simulatorUi.image.tag }}"
+          imagePullPolicy: {{ .Values.simulatorUi.image.pullPolicy }}
+          envFrom:
+            - configMapRef:
+                name: {{ include "crypto-simulator.configMapName" . }}
+          ports:
+            - name: http
+              containerPort: {{ .Values.simulatorUi.service.port }}
+          readinessProbe:
+            httpGet:
+              path: /health
+              port: http
+            initialDelaySeconds: 5
+            periodSeconds: 5
+            timeoutSeconds: 5
+          livenessProbe:
+            httpGet:
+              path: /health
+              port: http
+            initialDelaySeconds: 15
+            periodSeconds: 10
+            timeoutSeconds: 5
+          resources:
+            {{- toYaml .Values.simulatorUi.resources | nindent 12 }}

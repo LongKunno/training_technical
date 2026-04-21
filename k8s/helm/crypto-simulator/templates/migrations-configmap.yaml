@@ -1,0 +1,8 @@
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: {{ include "crypto-simulator.migrationsConfigMapName" . }}
+  labels:
+    {{- include "crypto-simulator.labels" . | nindent 4 }}
+data:
+  {{- (.Files.Glob "files/migrations/*").AsConfig | nindent 2 }}

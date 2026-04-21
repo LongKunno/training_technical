@@ -1,0 +1,15 @@
+apiVersion: v1
+kind: Service
+metadata:
+  name: {{ include "crypto-simulator.kafkaServiceName" . }}
+  labels:
+    {{- include "crypto-simulator.labels" . | nindent 4 }}
+    app.kubernetes.io/component: kafka
+spec:
+  selector:
+    {{- include "crypto-simulator.selectorLabels" . | nindent 4 }}
+    app.kubernetes.io/component: kafka
+  ports:
+    - name: kafka
+      port: {{ .Values.kafka.service.port }}
+      targetPort: kafka

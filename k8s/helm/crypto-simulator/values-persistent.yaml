@@ -1,0 +1,11 @@
+postgres:
+  persistence:
+    enabled: true
+    size: 10Gi
+    storageClassName: ""
+
+kafka:
+  persistence:
+    enabled: true
+    size: 10Gi
+    storageClassName: ""

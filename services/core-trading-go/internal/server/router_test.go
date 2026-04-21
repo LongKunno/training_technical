@@ -607,7 +607,9 @@ func TestNewRouterPaperTimelineStreamEndpoint(t *testing.T) {
 	if err != nil {
 		t.Fatalf("failed to open stream: %v", err)
 	}
-	defer resp.Body.Close()
+	defer func() {
+		_ = resp.Body.Close()
+	}()
 
 	postJSON(t, router, "/api/paper/orders", `{"symbol":"BTCUSDT","side":"buy","quantity":1,"price":100}`)
 
@@ -721,7 +723,7 @@ func newTestRouterWithRules(t *testing.T, initialBalance float64, rules papertra
 		t.Fatalf("failed to create paper trading engine: %v", err)
 	}
 
-	return server.NewRouter(engine)
+	return server.NewRouter(engine, nil)
 }
 
 func postJSON(t *testing.T, router http.Handler, path string, body string) {

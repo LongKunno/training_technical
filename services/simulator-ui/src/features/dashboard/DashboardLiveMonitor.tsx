@@ -2,11 +2,18 @@ import { Link } from "react-router-dom";
 
 import { ApiClientError } from "../../shared/api/http";
 import { ChartPanel } from "../../shared/charts";
-import { useCurrentSessionSnapshotQuery, useCurrentTimelineStream } from "../../shared/query";
+import {
+  resolveServiceAvailability,
+  useCoreHealthQuery,
+  useCurrentSessionSnapshotQuery,
+  useCurrentTimelineStream,
+} from "../../shared/query";
 import { selectTimelineStreamStatus, useOperatorUiStore } from "../../shared/state";
 import type {
   CurrentSessionSnapshot,
   PortfolioPositionSummary,
+  TimelineStreamStatus,
+  UpstreamAvailability,
 } from "../../shared/types";
 import {
   Badge,
@@ -64,7 +71,15 @@ interface AttentionItem {
 const actionLinkClassName =
   "focus-ring inline-flex h-11 items-center justify-center rounded-[18px] border px-5 text-sm font-medium transition";
 
-function getErrorCopy(error: unknown): EmptyCopy {
+function getErrorCopy(error: unknown, coreAvailability: UpstreamAvailability): EmptyCopy {
+  if (coreAvailability === "down") {
+    return {
+      title: "Core trading API unavailable",
+      description:
+        "The dashboard could not reach /core/health and /core/api/paper/*, so the current-session read model cannot hydrate yet.",
+    };
+  }
+
   if (error instanceof ApiClientError && error.code === "session_not_found") {
     return {
       title: "No current paper session",
@@ -188,11 +203,23 @@ function buildOperatorSnapshotSummary(
 
 function buildAttentionItems(
   snapshot: CurrentSessionSnapshot | undefined,
+  coreAvailability: UpstreamAvailability,
   riskPosture: RiskPosture,
-  timelineStreamStatus: string,
+  timelineStreamStatus: TimelineStreamStatus,
   streamError?: Error,
 ): AttentionItem[] {
   if (!snapshot) {
+    if (coreAvailability === "down") {
+      return [
+        {
+          title: "Core trading API is down",
+          detail:
+            "Current-session reads depend on /core/* and are unavailable right now. Restore the paper engine before expecting live equity, orders, or risk snapshots here.",
+          tone: "danger",
+        },
+      ];
+    }
+
     return [
       {
         title: "Current snapshot missing",
@@ -480,8 +507,10 @@ function renderSymbolSummary(snapshot: CurrentSessionSnapshot) {
 
 export function DashboardLiveMonitor() {
   const currentSnapshotQuery = useCurrentSessionSnapshotQuery();
+  const coreHealthQuery = useCoreHealthQuery();
+  const coreAvailability = resolveServiceAvailability(coreHealthQuery);
   const snapshot = currentSnapshotQuery.data;
-  const currentErrorCopy = getErrorCopy(currentSnapshotQuery.error);
+  const currentErrorCopy = getErrorCopy(currentSnapshotQuery.error, coreAvailability);
   const timelineStreamStatus = useOperatorUiStore(selectTimelineStreamStatus);
   const timelineStream = useCurrentTimelineStream({
     enabled: Boolean(snapshot?.session.id),
@@ -499,6 +528,7 @@ export function DashboardLiveMonitor() {
   );
   const attentionItems = buildAttentionItems(
     snapshot,
+    coreAvailability,
     riskPosture,
     timelineStreamStatus,
     timelineStream.error ?? undefined,

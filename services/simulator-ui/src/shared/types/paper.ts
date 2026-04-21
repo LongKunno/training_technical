@@ -21,13 +21,18 @@ export interface PaperOrder {
   symbol: string;
   side: OrderSide;
   quantity: number;
+  requested_quantity?: number;
   price: number;
   requested_price: number;
   notional: number;
+  requested_notional?: number;
   fee: number;
   fee_rate: number;
   slippage_rate: number;
+  fill_count?: number;
+  remaining_quantity?: number;
   status: string;
+  terminal_reason?: string;
   executed_at: IsoDateTimeString;
 }
 

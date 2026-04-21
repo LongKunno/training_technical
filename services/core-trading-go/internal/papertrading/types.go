@@ -26,19 +26,24 @@ type Position struct {
 }
 
 type PaperOrder struct {
-	ID             string    `json:"id"`
-	AccountID      string    `json:"account_id"`
-	Symbol         string    `json:"symbol"`
-	Side           OrderSide `json:"side"`
-	Quantity       float64   `json:"quantity"`
-	Price          float64   `json:"price"`
-	RequestedPrice float64   `json:"requested_price"`
-	Notional       float64   `json:"notional"`
-	Fee            float64   `json:"fee"`
-	FeeRate        float64   `json:"fee_rate"`
-	SlippageRate   float64   `json:"slippage_rate"`
-	Status         string    `json:"status"`
-	ExecutedAt     time.Time `json:"executed_at"`
+	ID                string    `json:"id"`
+	AccountID         string    `json:"account_id"`
+	Symbol            string    `json:"symbol"`
+	Side              OrderSide `json:"side"`
+	Quantity          float64   `json:"quantity"`
+	RequestedQuantity float64   `json:"requested_quantity,omitempty"`
+	Price             float64   `json:"price"`
+	RequestedPrice    float64   `json:"requested_price"`
+	Notional          float64   `json:"notional"`
+	RequestedNotional float64   `json:"requested_notional,omitempty"`
+	Fee               float64   `json:"fee"`
+	FeeRate           float64   `json:"fee_rate"`
+	SlippageRate      float64   `json:"slippage_rate"`
+	FillCount         int       `json:"fill_count,omitempty"`
+	RemainingQuantity float64   `json:"remaining_quantity,omitempty"`
+	Status            string    `json:"status"`
+	TerminalReason    string    `json:"terminal_reason,omitempty"`
+	ExecutedAt        time.Time `json:"executed_at"`
 }
 
 type PlaceOrderRequest struct {
@@ -86,6 +91,18 @@ type SimulationRules struct {
 	FeeRate      float64      `json:"fee_rate"`
 	SlippageRate float64      `json:"slippage_rate"`
 	RiskControls RiskControls `json:"risk_controls"`
+}
+
+type MarketExecutionProfile struct {
+	SignalLatencyTicks     int     `json:"signal_latency_ticks"`
+	SpreadBps              float64 `json:"spread_bps"`
+	MaxFillNotionalPerTick float64 `json:"max_fill_notional_per_tick"`
+}
+
+type SessionExecutionProfile struct {
+	InitialBalance float64                `json:"initial_balance"`
+	Rules          SimulationRules        `json:"rules"`
+	MarketProfile  MarketExecutionProfile `json:"market_profile"`
 }
 
 type RulesSummary struct {
@@ -151,6 +168,9 @@ type SessionTimelinePoint struct {
 type SignalV1 struct {
 	StrategyID string    `json:"strategy_id"`
 	SignalID   string    `json:"signal_id"`
+	RunID      string    `json:"run_id,omitempty"`
+	BotID      string    `json:"bot_id,omitempty"`
+	BotVersion string    `json:"bot_version,omitempty"`
 	Symbol     string    `json:"symbol"`
 	Side       OrderSide `json:"side"`
 	Quantity   float64   `json:"quantity,omitempty"`
@@ -162,10 +182,31 @@ type SignalV1 struct {
 type SignalExecution struct {
 	SignalID      string      `json:"signal_id"`
 	StrategyID    string      `json:"strategy_id"`
+	RunID         string      `json:"run_id,omitempty"`
+	BotID         string      `json:"bot_id,omitempty"`
+	BotVersion    string      `json:"bot_version,omitempty"`
 	Status        string      `json:"status"`
 	Order         *PaperOrder `json:"order,omitempty"`
 	DerivedPrice  float64     `json:"derived_price,omitempty"`
 	DerivedAmount float64     `json:"derived_amount,omitempty"`
+}
+
+type PendingExecution struct {
+	OrderID               string         `json:"order_id"`
+	SignalID              string         `json:"signal_id"`
+	StrategyID            string         `json:"strategy_id"`
+	RunID                 string         `json:"run_id,omitempty"`
+	BotID                 string         `json:"bot_id,omitempty"`
+	BotVersion            string         `json:"bot_version,omitempty"`
+	Symbol                string         `json:"symbol"`
+	Side                  OrderSide      `json:"side"`
+	RequestedQuantity     float64        `json:"requested_quantity"`
+	RequestedNotional     float64        `json:"requested_notional"`
+	RequestedPrice        float64        `json:"requested_price"`
+	RemainingQuantity     float64        `json:"remaining_quantity"`
+	RemainingLatencyTicks int            `json:"remaining_latency_ticks"`
+	CreatedAt             time.Time      `json:"created_at"`
+	Details               map[string]any `json:"details,omitempty"`
 }
 
 type AuditEvent struct {
@@ -203,17 +244,19 @@ type SessionReport struct {
 }
 
 type PersistentState struct {
-	Account          VirtualAccount                    `json:"account"`
-	InitialBalance   float64                           `json:"initial_balance"`
-	RealizedPnL      float64                           `json:"realized_pnl"`
-	Rules            SimulationRules                   `json:"rules"`
-	Orders           []PaperOrder                      `json:"orders"`
-	MarketPrices     map[string]marketdata.PriceTickV1 `json:"market_prices"`
-	Session          SimulationSession                 `json:"session"`
-	AuditEvents      []AuditEvent                      `json:"audit_events"`
-	Report           SessionReport                     `json:"report"`
-	PeakEquity       float64                           `json:"peak_equity"`
-	ProcessedSignals []string                          `json:"processed_signals"`
+	Account           VirtualAccount                    `json:"account"`
+	InitialBalance    float64                           `json:"initial_balance"`
+	RealizedPnL       float64                           `json:"realized_pnl"`
+	Rules             SimulationRules                   `json:"rules"`
+	MarketProfile     MarketExecutionProfile            `json:"market_profile"`
+	Orders            []PaperOrder                      `json:"orders"`
+	PendingExecutions []PendingExecution                `json:"pending_executions"`
+	MarketPrices      map[string]marketdata.PriceTickV1 `json:"market_prices"`
+	Session           SimulationSession                 `json:"session"`
+	AuditEvents       []AuditEvent                      `json:"audit_events"`
+	Report            SessionReport                     `json:"report"`
+	PeakEquity        float64                           `json:"peak_equity"`
+	ProcessedSignals  []string                          `json:"processed_signals"`
 }
 
 type StateStore interface {

@@ -42,6 +42,15 @@ export function useMarketReplayScenariosQuery(options: QueryHookOptions = {}) {
   });
 }
 
+export function useMarketReplayScenarioCatalogQuery(options: QueryHookOptions = {}) {
+  return useQuery({
+    enabled: isEnabled(options.enabled),
+    queryFn: ({ signal }) => dataApi.listMarketScenarioCatalog({ signal }),
+    queryKey: dataQueryKeys.marketScenarioCatalog(),
+    staleTime: options.staleTime,
+  });
+}
+
 export function useStrategySignalScenariosQuery(options: QueryHookOptions = {}) {
   return useQuery({
     enabled: isEnabled(options.enabled),
@@ -106,4 +115,3 @@ export function useReplayStrategySignalsMutation() {
     },
   });
 }
-

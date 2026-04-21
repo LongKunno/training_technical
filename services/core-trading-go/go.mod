@@ -3,6 +3,7 @@ module crypto_simulator/core_trading
 go 1.25.0
 
 require (
+	github.com/DATA-DOG/go-sqlmock v1.5.2
 	github.com/jackc/pgx/v5 v5.9.1
 	github.com/segmentio/kafka-go v0.4.50
 )

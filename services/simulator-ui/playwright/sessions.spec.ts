@@ -6,6 +6,7 @@ import {
   installEventSourceMock,
   mockJson,
   mockJsonHandler,
+  mockPlatformHealth,
 } from "./support";
 
 const sessionHistory = [
@@ -37,6 +38,7 @@ const sessionHistory = [
 
 test("sessions route filters historical list without mounting SSE", async ({ page }) => {
   await installEventSourceMock(page);
+  await mockPlatformHealth(page);
 
   await mockJson(page, "**/core/api/paper/session", {
     session: {
@@ -131,6 +133,7 @@ test("sessions route filters historical list without mounting SSE", async ({ pag
 
 test("session detail stays historical and never mounts current-session SSE", async ({ page }) => {
   await installEventSourceMock(page);
+  await mockPlatformHealth(page);
 
   await mockJson(page, "**/core/api/paper/report?session_id=paper-historical", {
     report: {

@@ -4,6 +4,7 @@ import type {
   CurrentSessionSnapshot,
   CurrentSessionSnapshotQuery,
   ManualSignalRequest,
+  PortfolioSummary,
   PaperAccountResponse,
   PaperAuditQuery,
   PaperAuditResponse,
@@ -20,8 +21,10 @@ import type {
   PaperTimelineResponse,
   PlacePaperOrderRequest,
   PlacePaperOrderResponse,
+  RulesSummary,
   SelectedSessionDetail,
   SelectedSessionDetailQuery,
+  ServiceHealth,
   SessionHistoryFilter,
   SessionReport,
   SignalExecutionResponse,
@@ -36,8 +39,60 @@ const DEFAULT_CURRENT_ORDERS_OFFSET = 0;
 const DEFAULT_SELECTED_AUDIT_LIMIT = 40;
 const DEFAULT_SELECTED_AUDIT_OFFSET = 0;
 
-function normalizeReport(report: SessionReport): SessionReport {
-  return attachTimelineToReport(report, normalizeTimeline(report.timeline ?? []));
+function normalizeArray<T>(items: T[] | null | undefined): T[] {
+  return Array.isArray(items) ? items : [];
+}
+
+function normalizeRulesSummary(rules: RulesSummary): RulesSummary {
+  return {
+    ...rules,
+    risk_controls: {
+      ...rules.risk_controls,
+      allowed_symbols: normalizeArray(rules.risk_controls.allowed_symbols),
+    },
+  };
+}
+
+function normalizePortfolioSummary(portfolio: PortfolioSummary): PortfolioSummary {
+  return {
+    ...portfolio,
+    positions: normalizeArray(portfolio.positions),
+  };
+}
+
+export function normalizeSessionReport(report: SessionReport): SessionReport {
+  const timeline = normalizeTimeline(report.timeline ?? []);
+  return attachTimelineToReport(
+    {
+      ...report,
+      symbols: normalizeArray(report.symbols),
+      timeline,
+    },
+    timeline,
+  );
+}
+
+export function normalizeCurrentSessionSnapshot(
+  snapshot: CurrentSessionSnapshot,
+): CurrentSessionSnapshot {
+  const timeline = normalizeTimeline(snapshot.timeline ?? snapshot.report.timeline ?? []);
+
+  return {
+    ...snapshot,
+    orders: normalizeArray(snapshot.orders),
+    portfolio: normalizePortfolioSummary(snapshot.portfolio),
+    positions: normalizeArray(snapshot.positions),
+    report: attachTimelineToReport(
+      {
+        ...snapshot.report,
+        symbols: normalizeArray(snapshot.report.symbols),
+        timeline,
+      },
+      timeline,
+    ),
+    rules: normalizeRulesSummary(snapshot.rules),
+    timeline,
+  };
 }
 
 export function getCurrentSessionSnapshotDefaults(
@@ -69,6 +124,10 @@ export function openCurrentTimelineStream(eventSourceFactory?: (url: string) => 
 }
 
 export const coreApi = {
+  getHealth(options?: ApiRequestOptions) {
+    return coreClient.get<ServiceHealth>("/health", undefined, options);
+  },
+
   getAccount(options?: ApiRequestOptions) {
     return coreClient
       .get<PaperAccountResponse>("/api/paper/account", undefined, options)
@@ -78,19 +137,19 @@ export const coreApi = {
   getPortfolio(options?: ApiRequestOptions) {
     return coreClient
       .get<PaperPortfolioResponse>("/api/paper/portfolio", undefined, options)
-      .then((payload) => payload.portfolio);
+      .then((payload) => normalizePortfolioSummary(payload.portfolio));
   },
 
   getPositions(options?: ApiRequestOptions) {
     return coreClient
       .get<PaperPositionsResponse>("/api/paper/positions", undefined, options)
-      .then((payload) => payload.positions);
+      .then((payload) => normalizeArray(payload.positions));
   },
 
   getRules(options?: ApiRequestOptions) {
     return coreClient
       .get<PaperRulesResponse>("/api/paper/rules", undefined, options)
-      .then((payload) => payload.rules);
+      .then((payload) => normalizeRulesSummary(payload.rules));
   },
 
   getCurrentSession(options?: ApiRequestOptions) {
@@ -102,7 +161,7 @@ export const coreApi = {
   listSessions(query: SessionHistoryFilter = {}, options?: ApiRequestOptions) {
     return coreClient
       .get<PaperSessionsResponse>("/api/paper/sessions", query, options)
-      .then((payload) => payload.sessions);
+      .then((payload) => normalizeArray(payload.sessions));
   },
 
   startSession(body: StartSessionRequest = {}, options?: ApiRequestOptions) {
@@ -126,13 +185,13 @@ export const coreApi = {
   listAudit(query: PaperAuditQuery = {}, options?: ApiRequestOptions) {
     return coreClient
       .get<PaperAuditResponse>("/api/paper/audit", query, options)
-      .then((payload) => payload.events);
+      .then((payload) => normalizeArray(payload.events));
   },
 
   getReport(query: PaperReportQuery = {}, options?: ApiRequestOptions) {
     return coreClient
       .get<PaperReportResponse>("/api/paper/report", query, options)
-      .then((payload) => normalizeReport(payload.report));
+      .then((payload) => normalizeSessionReport(payload.report));
   },
 
   getTimeline(query: PaperTimelineQuery = {}, options?: ApiRequestOptions) {
@@ -144,7 +203,7 @@ export const coreApi = {
   listOrders(filter: PaperOrderFilter = {}, options?: ApiRequestOptions) {
     return coreClient
       .get<PaperOrdersResponse>("/api/paper/orders", filter, options)
-      .then((payload) => payload.orders);
+      .then((payload) => normalizeArray(payload.orders));
   },
 
   placeOrder(body: PlacePaperOrderRequest, options?: ApiRequestOptions) {
@@ -184,15 +243,15 @@ export const coreApi = {
       coreApi.getTimeline({}, options),
     ]);
 
-    return {
+    return normalizeCurrentSessionSnapshot({
       session,
       portfolio,
       positions,
-      report: attachTimelineToReport(report, timeline),
+      report,
       rules,
       orders,
       timeline,
-    };
+    });
   },
 
   async getSelectedSessionDetail(
@@ -216,7 +275,7 @@ export const coreApi = {
 
     return {
       session_id: sessionId,
-      report: attachTimelineToReport(report, timeline),
+      report: attachTimelineToReport(normalizeSessionReport(report), timeline),
       events,
       timeline,
     };

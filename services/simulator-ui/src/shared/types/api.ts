@@ -22,4 +22,12 @@ export interface ApiErrorPayload {
   detail?: unknown;
 }
 
-export type TimelineStreamStatus = "idle" | "connecting" | "open" | "error";
+export interface ServiceHealth {
+  status: string;
+  service: string;
+  message: string;
+}
+
+export type UpstreamAvailability = "unknown" | "healthy" | "degraded" | "down";
+
+export type TimelineStreamStatus = "idle" | "connecting" | "open" | "degraded";

@@ -1,0 +1,5 @@
+postgres:
+  persistence:
+    enabled: true
+    existingClaim: crypto-simulator-postgres-static
+    storageClassName: ""

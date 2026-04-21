@@ -31,6 +31,44 @@ async def list_scenarios(request: Request) -> dict[str, object]:
     return {"scenarios": service.scenarios()}
 
 
+@router.get("/replay/catalog")
+async def list_scenario_catalog(request: Request) -> dict[str, object]:
+    service: MockMarketDataService = request.app.state.market_data_service
+    return {
+        "scenarios": [scenario.model_dump(mode="json") for scenario in service.scenario_catalog()],
+    }
+
+
+@router.get("/replay/catalog/{scenario_id}")
+async def get_scenario_catalog_entry(scenario_id: str, request: Request) -> dict[str, object]:
+    service: MockMarketDataService = request.app.state.market_data_service
+    try:
+        scenario = service.scenario_detail(scenario_id)
+    except KeyError as exc:
+        raise HTTPException(status_code=404, detail=f"scenario not found: {scenario_id}") from exc
+
+    return {"scenario": scenario.model_dump(mode="json")}
+
+
+@router.get("/replay")
+async def list_replay_ticks(
+    request: Request,
+    scenario: str = "baseline",
+    symbol: list[str] | None = None,
+) -> dict[str, object]:
+    service: MockMarketDataService = request.app.state.market_data_service
+    ticks = service.replay_ticks(
+        scenario=scenario,
+        symbols=symbol,
+    )
+
+    return {
+        "scenario": scenario,
+        "count": len(ticks),
+        "ticks": [tick.model_dump(mode="json") for tick in ticks],
+    }
+
+
 @router.post("/publish")
 async def publish_quotes(
     request: Request,

@@ -40,5 +40,110 @@
     "source": "mock-replay",
     "timestamp": "2026-04-17T00:03:00Z",
     "scenario": "volatility-spike"
+  },
+  {
+    "symbol": "BTCUSDT",
+    "price": 50000.0,
+    "source": "mock-replay",
+    "timestamp": "2026-04-18T00:00:00Z",
+    "scenario": "trend-up"
+  },
+  {
+    "symbol": "ETHUSDT",
+    "price": 2500.0,
+    "source": "mock-replay",
+    "timestamp": "2026-04-18T00:00:00Z",
+    "scenario": "trend-up"
+  },
+  {
+    "symbol": "BTCUSDT",
+    "price": 52000.0,
+    "source": "mock-replay",
+    "timestamp": "2026-04-18T00:02:00Z",
+    "scenario": "trend-up"
+  },
+  {
+    "symbol": "ETHUSDT",
+    "price": 2575.0,
+    "source": "mock-replay",
+    "timestamp": "2026-04-18T00:02:00Z",
+    "scenario": "trend-up"
+  },
+  {
+    "symbol": "BTCUSDT",
+    "price": 54000.0,
+    "source": "mock-replay",
+    "timestamp": "2026-04-18T00:04:00Z",
+    "scenario": "trend-up"
+  },
+  {
+    "symbol": "ETHUSDT",
+    "price": 2650.0,
+    "source": "mock-replay",
+    "timestamp": "2026-04-18T00:04:00Z",
+    "scenario": "trend-up"
+  },
+  {
+    "symbol": "BTCUSDT",
+    "price": 65000.0,
+    "source": "mock-replay",
+    "timestamp": "2026-04-19T00:00:00Z",
+    "scenario": "flash-crash-recovery"
+  },
+  {
+    "symbol": "BTCUSDT",
+    "price": 57000.0,
+    "source": "mock-replay",
+    "timestamp": "2026-04-19T00:01:00Z",
+    "scenario": "flash-crash-recovery"
+  },
+  {
+    "symbol": "BTCUSDT",
+    "price": 61000.0,
+    "source": "mock-replay",
+    "timestamp": "2026-04-19T00:03:00Z",
+    "scenario": "flash-crash-recovery"
+  },
+  {
+    "symbol": "BTCUSDT",
+    "price": 63500.0,
+    "source": "mock-replay",
+    "timestamp": "2026-04-19T00:06:00Z",
+    "scenario": "flash-crash-recovery"
+  },
+  {
+    "symbol": "BTCUSDT",
+    "price": 30000.0,
+    "source": "mock-replay",
+    "timestamp": "2026-04-20T00:00:00Z",
+    "scenario": "range-chop"
+  },
+  {
+    "symbol": "BTCUSDT",
+    "price": 30500.0,
+    "source": "mock-replay",
+    "timestamp": "2026-04-20T00:01:00Z",
+    "scenario": "range-chop"
+  },
+  {
+    "symbol": "BTCUSDT",
+    "price": 29900.0,
+    "source": "mock-replay",
+    "timestamp": "2026-04-20T00:02:00Z",
+    "scenario": "range-chop"
+  },
+  {
+    "symbol": "BTCUSDT",
+    "price": 30400.0,
+    "source": "mock-replay",
+    "timestamp": "2026-04-20T00:03:00Z",
+    "scenario": "range-chop"
+  },
+  {
+    "symbol": "BTCUSDT",
+    "price": 30050.0,
+    "source": "mock-replay",
+    "timestamp": "2026-04-20T00:04:00Z",
+    "scenario": "range-chop"
   }
 ]

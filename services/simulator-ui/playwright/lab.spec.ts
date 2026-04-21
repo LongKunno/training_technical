@@ -1,6 +1,6 @@
 import { expect, test } from "@playwright/test";
 
-import { fulfillJson, mockJson, mockJsonHandler } from "./support";
+import { fulfillJson, mockJson, mockJsonHandler, mockPlatformHealth } from "./support";
 
 test("lab route runs operator actions and records activity locally", async ({ page }) => {
   let currentSession = {
@@ -11,6 +11,7 @@ test("lab route runs operator actions and records activity locally", async ({ pa
     status: "running",
   };
 
+  await mockPlatformHealth(page);
   await mockJsonHandler(page, "**/core/api/paper/session", async (route) => {
     await fulfillJson(route, { session: currentSession });
   });
@@ -76,4 +77,38 @@ test("lab route runs operator actions and records activity locally", async ({ pa
 
   await page.getByRole("button", { name: "Send signal" }).click();
   await expect(page.getByText("Manual signal sent", { exact: true })).toBeVisible();
+});
+
+test("lab locks replay controls when the data upstream is down", async ({ page }) => {
+  await mockPlatformHealth(page, { data: "down" });
+  await mockJson(page, "**/core/api/paper/session", {
+    session: {
+      id: "paper-live",
+      last_event_at: "2026-04-18T09:05:00Z",
+      reset_count: 0,
+      started_at: "2026-04-18T09:00:00Z",
+      status: "running",
+    },
+  });
+  await mockJsonHandler(page, "**/data/api/data/**", async (route) => {
+    await fulfillJson(
+      route,
+      {
+        error: {
+          code: "upstream_unavailable",
+          message: "Data Pipeline (Python) is unavailable.",
+        },
+      },
+      503,
+    );
+  });
+
+  await page.goto("/lab");
+
+  await expect(page.getByText("Upstream availability degraded")).toBeVisible();
+  await expect(page.getByRole("button", { name: "Publish latest" })).toBeDisabled();
+  await expect(page.getByRole("button", { name: "Replay scenario" })).toBeDisabled();
+  await expect(page.getByRole("button", { name: "Publish slice" })).toBeDisabled();
+  await expect(page.getByRole("button", { name: "Replay all" })).toBeDisabled();
+  await expect(page.getByRole("button", { name: "Send signal" })).toBeEnabled();
 });

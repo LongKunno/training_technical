@@ -10,6 +10,8 @@ import { ApiClientError } from "../../shared/api/http";
 import { ChartPanel, createTimelineAreaOption } from "../../shared/charts";
 import { resolveSelectedSessionId } from "../../shared/lib";
 import {
+  resolveServiceAvailability,
+  useCoreHealthQuery,
   useCurrentSessionQuery,
   usePaperReportQuery,
   usePaperTimelineQuery,
@@ -20,7 +22,7 @@ import {
   selectSessionHistoryFilter,
   useOperatorUiStore,
 } from "../../shared/state";
-import type { SessionHistoryEntry } from "../../shared/types";
+import type { SessionHistoryEntry, UpstreamAvailability } from "../../shared/types";
 import { SearchInput } from "../../shared/ui/Input";
 import {
   Badge,
@@ -79,7 +81,11 @@ function setStoreFilter(
   actions.setSessionPage(filter.offset / filter.limit);
 }
 
-function getHistoryErrorMessage(error: unknown): string {
+function getHistoryErrorMessage(error: unknown, coreAvailability: UpstreamAvailability): string {
+  if (coreAvailability === "down") {
+    return "Core trading API is unavailable. Historical review depends on /core/health and /core/api/paper/*, so the saved session index cannot load right now.";
+  }
+
   if (error instanceof ApiClientError && error.code === "invalid_session_status") {
     return "The requested status filter is invalid. Reset the filter and try again.";
   }
@@ -280,6 +286,8 @@ export function SessionsRouteView() {
   const setSessionSearch = useOperatorUiStore((state) => state.setSessionSearch);
   const setSessionStatus = useOperatorUiStore((state) => state.setSessionStatus);
   const resetSessionHistory = useOperatorUiStore((state) => state.resetSessionHistory);
+  const coreHealthQuery = useCoreHealthQuery();
+  const coreAvailability = resolveServiceAvailability(coreHealthQuery);
   const currentSessionQuery = useCurrentSessionQuery();
   const historyQuery = useSessionHistoryQuery(parsedFilter);
 
@@ -408,7 +416,9 @@ export function SessionsRouteView() {
     });
   }
 
-  const historyErrorMessage = historyQuery.isError ? getHistoryErrorMessage(historyQuery.error) : null;
+  const historyErrorMessage = historyQuery.isError
+    ? getHistoryErrorMessage(historyQuery.error, coreAvailability)
+    : null;
   const pageNumber = getPageNumber(parsedFilter);
   const hasNextPage = sessions.length === parsedFilter.limit;
   const selectedPreviewSession =
@@ -420,9 +430,9 @@ export function SessionsRouteView() {
     ? "Selected session preview is unavailable"
     : "No timeline stored for this session";
   const previewEmptyDescription = previewReportQuery.isError
-    ? getHistoryErrorMessage(previewReportQuery.error)
+    ? getHistoryErrorMessage(previewReportQuery.error, coreAvailability)
     : previewTimelineQuery.isError
-      ? getHistoryErrorMessage(previewTimelineQuery.error)
+      ? getHistoryErrorMessage(previewTimelineQuery.error, coreAvailability)
       : "This session does not have a stored timeline snapshot yet. Historical detail can still render report and audit data safely.";
   const selectedDetailHref = selectedPreviewId
     ? buildSessionDetailPath(selectedPreviewId, {

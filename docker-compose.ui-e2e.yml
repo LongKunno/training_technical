@@ -1,0 +1,9 @@
+services:
+  ui_e2e_runner:
+    build:
+      context: ./services/simulator-ui
+      dockerfile: Dockerfile.e2e
+    environment:
+      - CI=1
+      - PLAYWRIGHT_BASE_URL=http://simulator_ui
+    working_dir: /app

@@ -1,8 +1,18 @@
-import { useEffect, type ReactNode } from "react";
+import { useEffect, type ComponentType, type ReactNode } from "react";
 
 import { Link, NavLink, useLocation } from "react-router-dom";
 
-import { selectSelectedSessionId, useOperatorUiStore } from "../../shared/state";
+import {
+  resolveServiceAvailability,
+  useCoreHealthQuery,
+  useDataHealthQuery,
+} from "../../shared/query";
+import {
+  selectSelectedSessionId,
+  selectTimelineStreamStatus,
+  useOperatorUiStore,
+} from "../../shared/state";
+import type { ServiceHealth, TimelineStreamStatus, UpstreamAvailability } from "../../shared/types";
 import {
   ArrowUpRightIcon,
   Badge,
@@ -11,8 +21,10 @@ import {
   DatabaseIcon,
   LabIcon,
   PulseIcon,
+  RunsIcon,
   SessionsIcon,
   ShieldIcon,
+  SparklineIcon,
   cx,
 } from "../../shared/ui";
 
@@ -34,6 +46,24 @@ const navigation = [
     icon: SessionsIcon,
   },
   {
+    href: "/experiments",
+    label: "Experiments",
+    description: "Sequential batch evaluation",
+    icon: RunsIcon,
+  },
+  {
+    href: "/runs",
+    label: "Runs",
+    description: "Single-run workflow and detail",
+    icon: RunsIcon,
+  },
+  {
+    href: "/leaderboard",
+    label: "Leaderboard",
+    description: "Completed run ranking and comparison",
+    icon: SparklineIcon,
+  },
+  {
     href: "/lab",
     label: "Lab",
     description: "Operator controls and replay",
@@ -41,23 +71,116 @@ const navigation = [
   },
 ];
 
-const statusCards = [
-  {
-    title: "Baseline contract frozen",
-    description: "Current rebuild preserves /core/* and /data/* integration paths.",
-    icon: DatabaseIcon,
-  },
-  {
-    title: "Realtime stays isolated",
-    description: "Current-session stream updates dashboard only, never historical views.",
+type BadgeTone = "neutral" | "success" | "warning" | "danger" | "info";
+
+interface RuntimeStatusCard {
+  badgeLabel: string;
+  badgeTone: BadgeTone;
+  description: string;
+  icon: ComponentType<{ className?: string }>;
+  title: string;
+}
+
+function getAvailabilityBadgeTone(availability: UpstreamAvailability): BadgeTone {
+  switch (availability) {
+    case "healthy":
+      return "success";
+    case "degraded":
+      return "warning";
+    case "down":
+      return "danger";
+    default:
+      return "neutral";
+  }
+}
+
+function getAvailabilityLabel(availability: UpstreamAvailability): string {
+  switch (availability) {
+    case "healthy":
+      return "Healthy";
+    case "degraded":
+      return "Degraded";
+    case "down":
+      return "Down";
+    default:
+      return "Checking";
+  }
+}
+
+function buildServiceStatusCard(input: {
+  availability: UpstreamAvailability;
+  fallbackDescription: string;
+  health?: ServiceHealth;
+  icon: ComponentType<{ className?: string }>;
+  title: string;
+}): RuntimeStatusCard {
+  return {
+    badgeLabel: getAvailabilityLabel(input.availability),
+    badgeTone: getAvailabilityBadgeTone(input.availability),
+    description:
+      input.health?.message ||
+      (input.availability === "down"
+        ? `${input.title} is unreachable from the shell right now.`
+        : input.fallbackDescription),
+    icon: input.icon,
+    title: input.title,
+  };
+}
+
+function buildTimelineStatusCard(
+  pathname: string,
+  status: TimelineStreamStatus,
+): RuntimeStatusCard {
+  if (!pathname.startsWith("/dashboard")) {
+    return {
+      badgeLabel: "Idle",
+      badgeTone: "neutral",
+      description:
+        "Current-session SSE only mounts on the dashboard, so historical routes stay immutable.",
+      icon: PulseIcon,
+      title: "Current SSE",
+    };
+  }
+
+  if (status === "open") {
+    return {
+      badgeLabel: "Live",
+      badgeTone: "success",
+      description:
+        "Current-session timeline is streaming into the dashboard without mutating historical views.",
+      icon: PulseIcon,
+      title: "Current SSE",
+    };
+  }
+
+  if (status === "connecting") {
+    return {
+      badgeLabel: "Connecting",
+      badgeTone: "info",
+      description: "Dashboard mounted the stream and is waiting for the current-session feed.",
+      icon: PulseIcon,
+      title: "Current SSE",
+    };
+  }
+
+  if (status === "degraded") {
+    return {
+      badgeLabel: "Degraded",
+      badgeTone: "warning",
+      description: "Dashboard is retrying the current-session SSE connection after a stream error.",
+      icon: PulseIcon,
+      title: "Current SSE",
+    };
+  }
+
+  return {
+    badgeLabel: "Idle",
+    badgeTone: "neutral",
+    description: "Current-session SSE is not mounted yet.",
     icon: PulseIcon,
-  },
-  {
-    title: "Risk posture surfaced",
-    description: "Shell is prepared for report, rules, and guardrail modules.",
-    icon: ShieldIcon,
-  },
-];
+    title: "Current SSE",
+  };
+}
 
 function getRouteContext(pathname: string, selectedSessionId: string | null) {
   if (pathname.startsWith("/sessions/")) {
@@ -79,6 +202,61 @@ function getRouteContext(pathname: string, selectedSessionId: string | null) {
       heading: "Historical review workspace",
       sectionLabel: "Sessions",
       statusLabel: selectedSessionId ?? "Preview not locked yet",
+    };
+  }
+
+  if (pathname.startsWith("/runs/")) {
+    return {
+      badge: "Run detail",
+      description:
+        "This surface binds run metadata to the immutable session report, audit, and timeline generated by the simulator. It does not mount current-session SSE.",
+      heading: "Simulation run detail",
+      sectionLabel: "Run Detail",
+      statusLabel: pathname.split("/").at(-1) ?? "Run selection",
+    };
+  }
+
+  if (pathname.startsWith("/experiments/")) {
+    return {
+      badge: "Batch detail",
+      description:
+        "This surface tracks sequential experiment progress, child-run ownership, and aggregate comparison across the matrix.",
+      heading: "Simulation experiment detail",
+      sectionLabel: "Experiment Detail",
+      statusLabel: pathname.split("/").at(-1) ?? "Experiment selection",
+    };
+  }
+
+  if (pathname === "/experiments") {
+    return {
+      badge: "Sequential scheduler",
+      description:
+        "Create bot × scenario × repetition matrices and keep the singleton paper engine benchmarkable by running one child session at a time.",
+      heading: "Simulation experiments workspace",
+      sectionLabel: "Experiments",
+      statusLabel: "Batch evaluation",
+    };
+  }
+
+  if (pathname === "/runs") {
+    return {
+      badge: "Single-run queue",
+      description:
+        "Create one reproducible bot run, review recent execution outcomes, and jump into session-backed detail without replacing the live dashboard surface.",
+      heading: "Simulation runs workspace",
+      sectionLabel: "Runs",
+      statusLabel: "Bot evaluation",
+    };
+  }
+
+  if (pathname === "/leaderboard") {
+    return {
+      badge: "Completed-only ranking",
+      description:
+        "Leaderboard compares completed standalone runs using persisted metrics snapshots. Batch experiment aggregates stay on experiment detail.",
+      heading: "Simulation leaderboard",
+      sectionLabel: "Leaderboard",
+      statusLabel: "Benchmark comparison",
     };
   }
 
@@ -106,7 +284,29 @@ function getRouteContext(pathname: string, selectedSessionId: string | null) {
 export function AppShell({ children }: AppShellProps) {
   const location = useLocation();
   const selectedSessionId = useOperatorUiStore(selectSelectedSessionId);
+  const timelineStreamStatus = useOperatorUiStore(selectTimelineStreamStatus);
+  const coreHealthQuery = useCoreHealthQuery();
+  const dataHealthQuery = useDataHealthQuery();
   const routeContext = getRouteContext(location.pathname, selectedSessionId);
+  const coreAvailability = resolveServiceAvailability(coreHealthQuery);
+  const dataAvailability = resolveServiceAvailability(dataHealthQuery);
+  const statusCards = [
+    buildServiceStatusCard({
+      availability: coreAvailability,
+      fallbackDescription: "Paper trading reads and mutations stay available through /core/*.",
+      health: coreHealthQuery.data,
+      icon: DatabaseIcon,
+      title: "Core API",
+    }),
+    buildServiceStatusCard({
+      availability: dataAvailability,
+      fallbackDescription: "Market and strategy catalogs stay available through /data/*.",
+      health: dataHealthQuery.data,
+      icon: ShieldIcon,
+      title: "Data API",
+    }),
+    buildTimelineStatusCard(location.pathname, timelineStreamStatus),
+  ];
   const dateLabel = new Intl.DateTimeFormat("en-US", {
     day: "numeric",
     month: "short",
@@ -193,7 +393,10 @@ export function AppShell({ children }: AppShellProps) {
                       <Icon className="size-4" />
                     </div>
                     <div>
-                      <h2 className="text-sm font-medium text-white">{card.title}</h2>
+                      <div className="flex flex-wrap items-center gap-2">
+                        <h2 className="text-sm font-medium text-white">{card.title}</h2>
+                        <Badge tone={card.badgeTone}>{card.badgeLabel}</Badge>
+                      </div>
                       <p className="mt-2 text-sm leading-6 text-slate-400">{card.description}</p>
                     </div>
                   </div>

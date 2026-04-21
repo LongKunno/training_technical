@@ -1,0 +1,6 @@
+apiVersion: v2
+name: crypto-simulator
+description: Local kind + Helm stack for the crypto trading simulator
+type: application
+version: 0.1.0
+appVersion: "1.0.0"

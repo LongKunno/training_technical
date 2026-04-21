@@ -1,7 +1,75 @@
 import json
 from pathlib import Path
 
-from app.schemas.market import PriceTick
+from app.schemas.market import MarketMicrostructureProfile, PriceTick, ScenarioCatalogEntry
+
+SCENARIO_METADATA: dict[str, dict[str, object]] = {
+    "baseline": {
+        "name": "Baseline Cross-Asset Session",
+        "description": (
+            "Short balanced replay covering BTC and ETH for smoke tests "
+            "and deterministic benchmark runs."
+        ),
+        "tags": ["smoke", "cross-asset", "balanced"],
+        "microstructure_profile": {
+            "signal_latency_ticks": 0,
+            "spread_bps": 2.5,
+            "max_fill_notional_per_tick": 5000,
+        },
+    },
+    "volatility-spike": {
+        "name": "Volatility Spike",
+        "description": (
+            "Fast one-way downside impulse used to verify risk controls "
+            "and degraded fill outcomes."
+        ),
+        "tags": ["stress", "drawdown", "single-asset"],
+        "microstructure_profile": {
+            "signal_latency_ticks": 1,
+            "spread_bps": 10,
+            "max_fill_notional_per_tick": 1200,
+        },
+    },
+    "trend-up": {
+        "name": "Trend Up",
+        "description": (
+            "Clean bullish replay designed for buy-and-hold and "
+            "trend-following baselines."
+        ),
+        "tags": ["trend", "bullish", "benchmark"],
+        "microstructure_profile": {
+            "signal_latency_ticks": 0,
+            "spread_bps": 3,
+            "max_fill_notional_per_tick": 4000,
+        },
+    },
+    "flash-crash-recovery": {
+        "name": "Flash Crash Recovery",
+        "description": (
+            "Sharp crash followed by partial recovery to compare defensive "
+            "versus momentum bots."
+        ),
+        "tags": ["crash", "recovery", "stress"],
+        "microstructure_profile": {
+            "signal_latency_ticks": 2,
+            "spread_bps": 18,
+            "max_fill_notional_per_tick": 900,
+        },
+    },
+    "range-chop": {
+        "name": "Range Chop",
+        "description": (
+            "Sideways oscillation scenario for mean-reversion and "
+            "moving-average crossover evaluation."
+        ),
+        "tags": ["range", "choppy", "benchmark"],
+        "microstructure_profile": {
+            "signal_latency_ticks": 1,
+            "spread_bps": 5,
+            "max_fill_notional_per_tick": 2500,
+        },
+    },
+}
 
 
 class MockMarketDataService:
@@ -41,6 +109,41 @@ class MockMarketDataService:
 
     def scenarios(self) -> list[str]:
         return sorted({tick.scenario for tick in self._ticks})
+
+    def scenario_catalog(self) -> list[ScenarioCatalogEntry]:
+        return [self.scenario_detail(scenario) for scenario in self.scenarios()]
+
+    def scenario_detail(self, scenario: str) -> ScenarioCatalogEntry:
+        ticks = self.replay_ticks(scenario=scenario)
+        if not ticks:
+            raise KeyError(scenario)
+
+        metadata = SCENARIO_METADATA.get(
+            scenario,
+            {
+                "name": scenario.replace("-", " ").title(),
+                "description": f"Replay scenario {scenario}.",
+                "tags": ["custom"],
+                "microstructure_profile": {
+                    "signal_latency_ticks": 0,
+                    "spread_bps": 0,
+                    "max_fill_notional_per_tick": 0,
+                },
+            },
+        )
+        return ScenarioCatalogEntry(
+            scenario_id=scenario,
+            name=str(metadata["name"]),
+            description=str(metadata["description"]),
+            symbols=sorted({tick.symbol for tick in ticks}),
+            tick_count=len(ticks),
+            started_at=min(tick.timestamp for tick in ticks),
+            ended_at=max(tick.timestamp for tick in ticks),
+            tags=[str(tag) for tag in metadata.get("tags", [])],
+            microstructure_profile=MarketMicrostructureProfile.model_validate(
+                metadata.get("microstructure_profile", {})
+            ),
+        )
 
     def _load_ticks(self) -> list[PriceTick]:
         payload = json.loads(self._fixture_path.read_text(encoding="utf-8"))

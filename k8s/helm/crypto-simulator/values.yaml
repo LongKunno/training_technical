@@ -1,0 +1,203 @@
+nameOverride: ""
+fullnameOverride: ""
+
+exposure:
+  mode: ingress
+  nodePort:
+    port: 32020
+  loadBalancer:
+    annotations: {}
+    ip: ""
+
+ingress:
+  className: nginx
+  host: simulator.localtest.me
+  annotations:
+    nginx.ingress.kubernetes.io/proxy-buffering: "off"
+    nginx.ingress.kubernetes.io/proxy-read-timeout: "3600"
+    nginx.ingress.kubernetes.io/proxy-send-timeout: "3600"
+
+deploymentDefaults:
+  minReadySeconds: 5
+  revisionHistoryLimit: 3
+  strategy:
+    type: RollingUpdate
+    rollingUpdate:
+      maxUnavailable: 0
+      maxSurge: 1
+
+podDisruptionBudget:
+  coreTrading:
+    enabled: false
+    minAvailable: 1
+  dataPipeline:
+    enabled: false
+    minAvailable: 1
+  simulatorUi:
+    enabled: false
+    minAvailable: 1
+
+autoscaling:
+  dataPipeline:
+    enabled: false
+    minReplicas: 2
+    maxReplicas: 6
+    targetCPUUtilizationPercentage: 70
+    targetMemoryUtilizationPercentage: 75
+
+opsBenchmark:
+  enabled: false
+  token: ""
+
+postgres:
+  image:
+    repository: postgres
+    tag: 15-alpine
+    pullPolicy: IfNotPresent
+  service:
+    port: 5432
+  auth:
+    username: root
+    password: rootpassword
+    database: crypto_sim
+  persistence:
+    enabled: true
+    size: 5Gi
+    storageClassName: ""
+    existingClaim: ""
+  resources:
+    requests:
+      cpu: 100m
+      memory: 128Mi
+    limits:
+      cpu: 500m
+      memory: 512Mi
+
+redis:
+  image:
+    repository: redis
+    tag: 7-alpine
+    pullPolicy: IfNotPresent
+  service:
+    port: 6379
+  resources:
+    requests:
+      cpu: 25m
+      memory: 64Mi
+    limits:
+      cpu: 200m
+      memory: 256Mi
+
+kafka:
+  image:
+    repository: apache/kafka
+    tag: 3.9.2
+    pullPolicy: IfNotPresent
+  service:
+    port: 9092
+  persistence:
+    enabled: true
+    size: 5Gi
+    storageClassName: ""
+    existingClaim: ""
+  resources:
+    requests:
+      cpu: 200m
+      memory: 512Mi
+    limits:
+      cpu: "1"
+      memory: 1Gi
+
+migrations:
+  image:
+    repository: migrate/migrate
+    tag: v4.18.1
+    pullPolicy: IfNotPresent
+  backoffLimit: 4
+
+coreTrading:
+  replicaCount: 1
+  image:
+    repository: crypto-simulator/core-trading
+    tag: dev
+    pullPolicy: IfNotPresent
+  service:
+    port: 8080
+  env:
+    stateStoreEnabled: true
+    accountId: paper-account-1
+    initialBalance: "10000"
+    feeRate: "0.001"
+    slippageRate: "0.001"
+    allowedSymbols: ""
+    maxPositionQuantity: "0"
+    maxOrderNotional: "0"
+    maxDailyLoss: "0"
+    cooldownSeconds: "0"
+    maxOpenNotional: "0"
+    kafkaTopic: price-ticks-v1
+    kafkaGroupId: core-trading-paper-engine
+  resources:
+    requests:
+      cpu: 100m
+      memory: 128Mi
+    limits:
+      cpu: 750m
+      memory: 512Mi
+
+dataPipeline:
+  replicaCount: 1
+  image:
+    repository: crypto-simulator/data-pipeline
+    tag: dev
+    pullPolicy: IfNotPresent
+  service:
+    port: 8000
+  env:
+    appTitle: Data Pipeline Service
+    appDescription: Python Crawler & Background Worker API
+    appVersion: 1.0.0
+    marketDataFixturePath: /app/app/fixtures/mock_ticks.json
+    strategySignalFixturePath: /app/app/fixtures/mock_signals.json
+    kafkaTopic: price-ticks-v1
+  resources:
+    requests:
+      cpu: 100m
+      memory: 128Mi
+    limits:
+      cpu: 500m
+      memory: 512Mi
+
+botRunner:
+  replicaCount: 1
+  image:
+    repository: crypto-simulator/bot-runner
+    tag: dev
+    pullPolicy: IfNotPresent
+  service:
+    port: 8001
+  env:
+    requestTimeoutSeconds: "5"
+  resources:
+    requests:
+      cpu: 50m
+      memory: 96Mi
+    limits:
+      cpu: 300m
+      memory: 256Mi
+
+simulatorUi:
+  replicaCount: 1
+  image:
+    repository: crypto-simulator/simulator-ui
+    tag: dev
+    pullPolicy: IfNotPresent
+  service:
+    port: 80
+  resources:
+    requests:
+      cpu: 50m
+      memory: 96Mi
+    limits:
+      cpu: 300m
+      memory: 256Mi

@@ -1,0 +1,39 @@
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: {{ include "crypto-simulator.configMapName" . }}
+  labels:
+    {{- include "crypto-simulator.labels" . | nindent 4 }}
+data:
+  POSTGRES_DB: {{ .Values.postgres.auth.database | quote }}
+  POSTGRES_USER: {{ .Values.postgres.auth.username | quote }}
+  REDIS_URL: {{ printf "redis://%s:%v/0" (include "crypto-simulator.redisServiceName" .) .Values.redis.service.port | quote }}
+  PAPER_STATE_STORE_ENABLED: {{ ternary "true" "false" .Values.coreTrading.env.stateStoreEnabled | quote }}
+  PAPER_ACCOUNT_ID: {{ .Values.coreTrading.env.accountId | quote }}
+  PAPER_INITIAL_BALANCE: {{ .Values.coreTrading.env.initialBalance | quote }}
+  PAPER_FEE_RATE: {{ .Values.coreTrading.env.feeRate | quote }}
+  PAPER_SLIPPAGE_RATE: {{ .Values.coreTrading.env.slippageRate | quote }}
+  PAPER_ALLOWED_SYMBOLS: {{ .Values.coreTrading.env.allowedSymbols | quote }}
+  PAPER_MAX_POSITION_QUANTITY: {{ .Values.coreTrading.env.maxPositionQuantity | quote }}
+  PAPER_MAX_ORDER_NOTIONAL: {{ .Values.coreTrading.env.maxOrderNotional | quote }}
+  PAPER_MAX_DAILY_LOSS: {{ .Values.coreTrading.env.maxDailyLoss | quote }}
+  PAPER_COOLDOWN_SECONDS: {{ .Values.coreTrading.env.cooldownSeconds | quote }}
+  PAPER_MAX_OPEN_NOTIONAL: {{ .Values.coreTrading.env.maxOpenNotional | quote }}
+  BOT_RUNNER_BASE_URL: {{ include "crypto-simulator.botRunnerBaseURL" . | quote }}
+  CORE_TRADING_KAFKA_BOOTSTRAP_SERVERS: {{ include "crypto-simulator.kafkaBootstrapServers" . | quote }}
+  CORE_TRADING_KAFKA_TOPIC: {{ .Values.coreTrading.env.kafkaTopic | quote }}
+  CORE_TRADING_KAFKA_GROUP_ID: {{ .Values.coreTrading.env.kafkaGroupId | quote }}
+  CORE_TRADING_INTERNAL_BASE_URL: {{ include "crypto-simulator.coreTradingBaseURL" . | quote }}
+  CORE_TRADING_BASE_URL: {{ include "crypto-simulator.coreTradingBaseURL" . | quote }}
+  DATA_PIPELINE_BASE_URL: {{ include "crypto-simulator.dataPipelineBaseURL" . | quote }}
+  APP_TITLE: {{ .Values.dataPipeline.env.appTitle | quote }}
+  APP_DESCRIPTION: {{ .Values.dataPipeline.env.appDescription | quote }}
+  APP_VERSION: {{ .Values.dataPipeline.env.appVersion | quote }}
+  MARKET_DATA_FIXTURE_PATH: {{ .Values.dataPipeline.env.marketDataFixturePath | quote }}
+  STRATEGY_SIGNAL_FIXTURE_PATH: {{ .Values.dataPipeline.env.strategySignalFixturePath | quote }}
+  MARKET_DATA_KAFKA_BOOTSTRAP_SERVERS: {{ include "crypto-simulator.kafkaBootstrapServers" . | quote }}
+  MARKET_DATA_KAFKA_TOPIC: {{ .Values.dataPipeline.env.kafkaTopic | quote }}
+  OPS_BENCHMARK_ENABLED: {{ ternary "true" "false" .Values.opsBenchmark.enabled | quote }}
+  BOT_RUNNER_REQUEST_TIMEOUT_SECONDS: {{ .Values.botRunner.env.requestTimeoutSeconds | quote }}
+  SIMULATOR_UI_CORE_PROXY_TARGET: {{ include "crypto-simulator.coreTradingBaseURL" . | quote }}
+  SIMULATOR_UI_DATA_PROXY_TARGET: {{ include "crypto-simulator.dataPipelineBaseURL" . | quote }}

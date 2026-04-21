@@ -1,0 +1,53 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: {{ include "crypto-simulator.dataPipelineServiceName" . }}
+  labels:
+    {{- include "crypto-simulator.labels" . | nindent 4 }}
+    app.kubernetes.io/component: data-pipeline
+spec:
+  minReadySeconds: {{ .Values.deploymentDefaults.minReadySeconds }}
+  revisionHistoryLimit: {{ .Values.deploymentDefaults.revisionHistoryLimit }}
+  strategy:
+    {{- toYaml .Values.deploymentDefaults.strategy | nindent 4 }}
+  {{- if not .Values.autoscaling.dataPipeline.enabled }}
+  replicas: {{ .Values.dataPipeline.replicaCount }}
+  {{- end }}
+  selector:
+    matchLabels:
+      {{- include "crypto-simulator.selectorLabels" . | nindent 6 }}
+      app.kubernetes.io/component: data-pipeline
+  template:
+    metadata:
+      labels:
+        {{- include "crypto-simulator.selectorLabels" . | nindent 8 }}
+        app.kubernetes.io/component: data-pipeline
+    spec:
+      containers:
+        - name: data-pipeline
+          image: "{{ .Values.dataPipeline.image.repository }}:{{ .Values.dataPipeline.image.tag }}"
+          imagePullPolicy: {{ .Values.dataPipeline.image.pullPolicy }}
+          envFrom:
+            - configMapRef:
+                name: {{ include "crypto-simulator.configMapName" . }}
+            - secretRef:
+                name: {{ include "crypto-simulator.secretName" . }}
+          ports:
+            - name: http
+              containerPort: {{ .Values.dataPipeline.service.port }}
+          readinessProbe:
+            httpGet:
+              path: /health
+              port: http
+            initialDelaySeconds: 5
+            periodSeconds: 5
+            timeoutSeconds: 5
+          livenessProbe:
+            httpGet:
+              path: /health
+              port: http
+            initialDelaySeconds: 15
+            periodSeconds: 10
+            timeoutSeconds: 5
+          resources:
+            {{- toYaml .Values.dataPipeline.resources | nindent 12 }}

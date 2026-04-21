@@ -1,0 +1,64 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: {{ include "crypto-simulator.coreTradingServiceName" . }}
+  labels:
+    {{- include "crypto-simulator.labels" . | nindent 4 }}
+    app.kubernetes.io/component: core-trading
+spec:
+  minReadySeconds: {{ .Values.deploymentDefaults.minReadySeconds }}
+  revisionHistoryLimit: {{ .Values.deploymentDefaults.revisionHistoryLimit }}
+  strategy:
+    {{- toYaml .Values.deploymentDefaults.strategy | nindent 4 }}
+  replicas: {{ .Values.coreTrading.replicaCount }}
+  selector:
+    matchLabels:
+      {{- include "crypto-simulator.selectorLabels" . | nindent 6 }}
+      app.kubernetes.io/component: core-trading
+  template:
+    metadata:
+      labels:
+        {{- include "crypto-simulator.selectorLabels" . | nindent 8 }}
+        app.kubernetes.io/component: core-trading
+    spec:
+      initContainers:
+        - name: wait-for-migrations
+          image: "{{ .Values.postgres.image.repository }}:{{ .Values.postgres.image.tag }}"
+          imagePullPolicy: {{ .Values.postgres.image.pullPolicy }}
+          envFrom:
+            - configMapRef:
+                name: {{ include "crypto-simulator.configMapName" . }}
+            - secretRef:
+                name: {{ include "crypto-simulator.secretName" . }}
+          command:
+            - sh
+            - -ec
+            - until psql "$DB_URI" -c 'SELECT 1 FROM paper_sessions LIMIT 1;' >/dev/null 2>&1; do echo "Waiting for paper_sessions migration"; sleep 2; done
+      containers:
+        - name: core-trading
+          image: "{{ .Values.coreTrading.image.repository }}:{{ .Values.coreTrading.image.tag }}"
+          imagePullPolicy: {{ .Values.coreTrading.image.pullPolicy }}
+          envFrom:
+            - configMapRef:
+                name: {{ include "crypto-simulator.configMapName" . }}
+            - secretRef:
+                name: {{ include "crypto-simulator.secretName" . }}
+          ports:
+            - name: http
+              containerPort: {{ .Values.coreTrading.service.port }}
+          readinessProbe:
+            httpGet:
+              path: /health
+              port: http
+            initialDelaySeconds: 5
+            periodSeconds: 5
+            timeoutSeconds: 5
+          livenessProbe:
+            httpGet:
+              path: /health
+              port: http
+            initialDelaySeconds: 15
+            periodSeconds: 10
+            timeoutSeconds: 5
+          resources:
+            {{- toYaml .Values.coreTrading.resources | nindent 12 }}

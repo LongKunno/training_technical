@@ -1,0 +1,50 @@
+apiVersion: batch/v1
+kind: Job
+metadata:
+  name: {{ printf "%s-migrations" (include "crypto-simulator.fullname" .) | trunc 63 | trimSuffix "-" }}
+  labels:
+    {{- include "crypto-simulator.labels" . | nindent 4 }}
+    app.kubernetes.io/component: migrations
+spec:
+  backoffLimit: {{ .Values.migrations.backoffLimit }}
+  template:
+    metadata:
+      labels:
+        {{- include "crypto-simulator.selectorLabels" . | nindent 8 }}
+        app.kubernetes.io/component: migrations
+    spec:
+      restartPolicy: OnFailure
+      initContainers:
+        - name: wait-for-postgres
+          image: "{{ .Values.postgres.image.repository }}:{{ .Values.postgres.image.tag }}"
+          imagePullPolicy: {{ .Values.postgres.image.pullPolicy }}
+          envFrom:
+            - configMapRef:
+                name: {{ include "crypto-simulator.configMapName" . }}
+            - secretRef:
+                name: {{ include "crypto-simulator.secretName" . }}
+          command:
+            - sh
+            - -ec
+            - until pg_isready -h {{ include "crypto-simulator.postgresServiceName" . }} -p {{ .Values.postgres.service.port }} -U "$POSTGRES_USER" -d "$POSTGRES_DB"; do echo "Waiting for postgres"; sleep 2; done
+      containers:
+        - name: migrations
+          image: "{{ .Values.migrations.image.repository }}:{{ .Values.migrations.image.tag }}"
+          imagePullPolicy: {{ .Values.migrations.image.pullPolicy }}
+          args:
+            - -path=/migrations
+            - -database=$(DATABASE_URL)
+            - up
+          env:
+            - name: DATABASE_URL
+              valueFrom:
+                secretKeyRef:
+                  name: {{ include "crypto-simulator.secretName" . }}
+                  key: DATABASE_URL
+          volumeMounts:
+            - name: migrations
+              mountPath: /migrations
+      volumes:
+        - name: migrations
+          configMap:
+            name: {{ include "crypto-simulator.migrationsConfigMapName" . }}

@@ -66,7 +66,51 @@ def test_latest_quote_endpoint_returns_latest_tick() -> None:
 def test_market_data_service_lists_scenarios() -> None:
     service = MockMarketDataService(fixture_path())
 
-    assert service.scenarios() == ["baseline", "volatility-spike"]
+    assert service.scenarios() == [
+        "baseline",
+        "flash-crash-recovery",
+        "range-chop",
+        "trend-up",
+        "volatility-spike",
+    ]
+
+
+def test_market_data_service_exposes_scenario_catalog() -> None:
+    service = MockMarketDataService(fixture_path())
+
+    catalog = service.scenario_catalog()
+
+    assert any(entry.scenario_id == "trend-up" for entry in catalog)
+    flash_crash = service.scenario_detail("flash-crash-recovery")
+    assert flash_crash.tick_count >= 4
+    assert "stress" in flash_crash.tags
+    assert flash_crash.microstructure_profile.signal_latency_ticks == 2
+
+
+def test_replay_ticks_endpoint_returns_ordered_ticks() -> None:
+    settings = Settings(market_data_fixture_path=fixture_path())
+    client = TestClient(create_app(settings=settings))
+
+    response = client.get("/api/data/market/quotes/replay", params={"scenario": "baseline"})
+
+    assert response.status_code == 200
+    payload = response.json()
+    assert payload["scenario"] == "baseline"
+    assert payload["count"] == 4
+    assert payload["ticks"][0]["symbol"] == "BTCUSDT"
+    assert payload["ticks"][-1]["symbol"] == "ETHUSDT"
+
+
+def test_scenario_catalog_endpoint_returns_metadata() -> None:
+    settings = Settings(market_data_fixture_path=fixture_path())
+    client = TestClient(create_app(settings=settings))
+
+    response = client.get("/api/data/market/quotes/replay/catalog")
+
+    assert response.status_code == 200
+    scenarios = response.json()["scenarios"]
+    assert any(item["scenario_id"] == "trend-up" for item in scenarios)
+    assert scenarios[0]["microstructure_profile"]["max_fill_notional_per_tick"] >= 0
 
 
 def test_publish_quotes_endpoint_calls_publisher() -> None:

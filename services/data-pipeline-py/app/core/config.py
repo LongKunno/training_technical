@@ -12,6 +12,8 @@ class Settings:
     strategy_signal_fixture_path: str = "/app/app/fixtures/mock_signals.json"
     kafka_bootstrap_servers: str = ""
     kafka_topic: str = "price-ticks-v1"
+    ops_benchmark_enabled: bool = False
+    ops_benchmark_token: str = ""
 
     @classmethod
     def from_env(cls) -> "Settings":
@@ -36,4 +38,6 @@ class Settings:
                 cls.kafka_bootstrap_servers,
             ),
             kafka_topic=os.getenv("MARKET_DATA_KAFKA_TOPIC", cls.kafka_topic),
+            ops_benchmark_enabled=os.getenv("OPS_BENCHMARK_ENABLED", "").lower() == "true",
+            ops_benchmark_token=os.getenv("OPS_BENCHMARK_TOKEN", cls.ops_benchmark_token),
         )

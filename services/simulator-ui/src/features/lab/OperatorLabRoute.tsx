@@ -10,7 +10,10 @@ import {
 import type { UseMutationResult } from "@tanstack/react-query";
 
 import {
+  resolveServiceAvailability,
+  useCoreHealthQuery,
   useCurrentSessionQuery,
+  useDataHealthQuery,
   useMarketReplayScenariosQuery,
   usePublishMarketQuotesMutation,
   usePublishStrategySignalsMutation,
@@ -31,6 +34,7 @@ import type {
   SignalExecutionResponse,
   SimulationSession,
   StrategySignal,
+  UpstreamAvailability,
 } from "../../shared/types";
 import {
   ArrowUpRightIcon,
@@ -60,9 +64,9 @@ const DEFAULT_STRATEGY_REPLAY_SPEED = "0";
 const DEFAULT_MANUAL_STRATEGY_ID = "manual-console";
 const DEFAULT_MANUAL_SYMBOL = "BTCUSDT";
 const DEFAULT_MANUAL_SIDE = "buy";
-const DEFAULT_MANUAL_PRICE = "100";
-const DEFAULT_MANUAL_QUANTITY = "1";
-const DEFAULT_MANUAL_NOTIONAL = "0";
+const DEFAULT_MANUAL_PRICE = "0";
+const DEFAULT_MANUAL_QUANTITY = "0";
+const DEFAULT_MANUAL_NOTIONAL = "100";
 const MAX_ACTIVITY_ITEMS = 8;
 
 const transportOptions = [
@@ -166,6 +170,19 @@ function compactList(values: string[], emptyLabel: string) {
   }
 
   return `${values.slice(0, 3).join(", ")} +${values.length - 3}`;
+}
+
+function describeAvailability(availability: UpstreamAvailability) {
+  switch (availability) {
+    case "healthy":
+      return "Healthy";
+    case "degraded":
+      return "Degraded";
+    case "down":
+      return "Down";
+    default:
+      return "Checking";
+  }
 }
 
 function formatErrorMessage(error: unknown) {
@@ -437,9 +454,16 @@ export function OperatorLabRoute() {
   const [manualNotional, setManualNotional] = useState(DEFAULT_MANUAL_NOTIONAL);
   const [catalogRefreshing, setCatalogRefreshing] = useState(false);
 
+  const coreHealthQuery = useCoreHealthQuery();
+  const dataHealthQuery = useDataHealthQuery();
   const currentSessionQuery = useCurrentSessionQuery();
   const marketScenariosQuery = useMarketReplayScenariosQuery();
   const strategyScenariosQuery = useStrategySignalScenariosQuery();
+  const coreAvailability = resolveServiceAvailability(coreHealthQuery);
+  const dataAvailability = resolveServiceAvailability(dataHealthQuery);
+  const coreUnavailable = coreAvailability === "down";
+  const dataUnavailable = dataAvailability === "down";
+  const upstreamUnavailable = coreUnavailable || dataUnavailable;
   const resolvedSessionIdDraft =
     sessionIdDraft ?? currentSessionQuery.data?.id ?? DEFAULT_SESSION_ID;
   const resolvedMarketScenario =
@@ -542,6 +566,8 @@ export function OperatorLabRoute() {
 
     try {
       await Promise.all([
+        coreHealthQuery.refetch(),
+        dataHealthQuery.refetch(),
         currentSessionQuery.refetch(),
         marketScenariosQuery.refetch(),
         strategyScenariosQuery.refetch(),
@@ -654,7 +680,11 @@ export function OperatorLabRoute() {
   }
 
   const currentSessionTone =
-    currentSessionQuery.data?.status === "running" ? "success" : "warning";
+    coreUnavailable
+      ? "danger"
+      : currentSessionQuery.data?.status === "running"
+        ? "success"
+        : "warning";
   const marketCatalogReady = marketScenariosQuery.data?.length ?? 0;
   const strategyCatalogReady = strategyScenariosQuery.data?.length ?? 0;
   const previewCount = previewSignals.length;
@@ -712,12 +742,17 @@ export function OperatorLabRoute() {
             <div className="rounded-[24px] border border-white/8 bg-white/[0.04] p-5">
               <div className="flex flex-wrap items-center gap-3">
                 <Badge leading={<LabIcon className="size-3" />} tone={currentSessionTone}>
-                  {currentSessionQuery.isLoading
+                  {coreUnavailable
+                    ? "Core down"
+                    : currentSessionQuery.isLoading
                     ? "Loading session"
                     : currentSessionQuery.data?.status ?? "Session unavailable"}
                 </Badge>
-                <Badge leading={<DatabaseIcon className="size-3" />} tone="info">
-                  Shared query hooks
+                <Badge
+                  leading={<DatabaseIcon className="size-3" />}
+                  tone={dataUnavailable ? "danger" : "info"}
+                >
+                  Data {describeAvailability(dataAvailability)}
                 </Badge>
               </div>
               <p className="mt-4 text-sm leading-6 text-slate-400">
@@ -725,6 +760,19 @@ export function OperatorLabRoute() {
                 live here while historical review remains read-only elsewhere.
               </p>
             </div>
+            {upstreamUnavailable ? (
+              <StatusCallout
+                description={
+                  coreUnavailable && dataUnavailable
+                    ? "Both core and data upstreams are unavailable. Session controls and replay actions are temporarily locked."
+                    : coreUnavailable
+                      ? "Core trading is unavailable. Session lifecycle and manual signal actions are locked until /core/health recovers."
+                      : "Data pipeline is unavailable. Market and strategy replay actions are locked until /data/health recovers."
+                }
+                title="Upstream availability degraded"
+                tone="danger"
+              />
+            ) : null}
             {anyMutationPending ? (
               <StatusCallout
                 description="An operator mutation is in flight. Current-session queries will be invalidated after it completes."
@@ -739,21 +787,27 @@ export function OperatorLabRoute() {
       <section className="grid gap-5 xl:grid-cols-4">
         <StatCard
           detail={
-            currentSessionQuery.data
+            coreUnavailable
+              ? "Core health checks are failing."
+              : currentSessionQuery.data
               ? `Last event ${formatDateTime(currentSessionQuery.data.last_event_at)}`
               : "Waiting for the current session query."
           }
           icon={<PulseIcon className="size-5" />}
           label="Current session"
-          tone={currentSessionQuery.data?.status === "running" ? "success" : "neutral"}
-          value={currentSessionQuery.data?.status ?? "loading"}
+          tone={coreUnavailable ? "warning" : currentSessionQuery.data?.status === "running" ? "success" : "neutral"}
+          value={coreUnavailable ? "down" : currentSessionQuery.data?.status ?? "loading"}
         />
         <StatCard
-          detail={formatList(marketScenariosQuery.data ?? [], "No market scenarios yet")}
+          detail={
+            dataUnavailable
+              ? "Data health checks are failing."
+              : formatList(marketScenariosQuery.data ?? [], "No market scenarios yet")
+          }
           icon={<DatabaseIcon className="size-5" />}
           label="Market catalogs"
-          tone={marketCatalogReady ? "accent" : "neutral"}
-          value={String(marketCatalogReady)}
+          tone={dataUnavailable ? "warning" : marketCatalogReady ? "accent" : "neutral"}
+          value={dataUnavailable ? "down" : String(marketCatalogReady)}
         />
         <StatCard
           detail={formatList(strategyIds, "No strategy IDs loaded")}
@@ -807,12 +861,26 @@ export function OperatorLabRoute() {
           <div className="grid gap-3">
             <div className="rounded-[22px] border border-white/8 bg-white/[0.04] p-4">
               <div className="flex flex-wrap items-center gap-3">
-                <Badge tone={currentSessionQuery.data?.status === "running" ? "success" : "warning"}>
-                  {currentSessionQuery.data?.status === "running" ? "Live session ready" : "Session action needed"}
+                <Badge
+                  tone={
+                    coreUnavailable
+                      ? "danger"
+                      : currentSessionQuery.data?.status === "running"
+                        ? "success"
+                        : "warning"
+                  }
+                >
+                  {coreUnavailable
+                    ? "Core unavailable"
+                    : currentSessionQuery.data?.status === "running"
+                      ? "Live session ready"
+                      : "Session action needed"}
                 </Badge>
               </div>
               <p className="mt-3 text-sm leading-6 text-slate-300">
-                {currentSessionQuery.data?.status === "running"
+                {coreUnavailable
+                  ? "Session lifecycle and manual signal actions are locked until the paper engine becomes reachable again."
+                  : currentSessionQuery.data?.status === "running"
                   ? "Market and strategy mutations will feed the current live paper session immediately."
                   : "Start a paper session first so replay and publish actions have an active target."}
               </p>
@@ -937,7 +1005,11 @@ export function OperatorLabRoute() {
                 </div>
               )}
               <div className="grid gap-3 sm:grid-cols-3">
-                <Button tone="primary" type="submit" disabled={startSessionMutation.isPending}>
+                <Button
+                  tone="primary"
+                  type="submit"
+                  disabled={coreUnavailable || startSessionMutation.isPending}
+                >
                   {startSessionMutation.isPending ? "Starting..." : "Start"}
                 </Button>
                 <Button
@@ -945,7 +1017,7 @@ export function OperatorLabRoute() {
                     void handleResetSession();
                   }}
                   tone="secondary"
-                  disabled={resetSessionMutation.isPending}
+                  disabled={coreUnavailable || resetSessionMutation.isPending}
                 >
                   {resetSessionMutation.isPending ? "Resetting..." : "Reset"}
                 </Button>
@@ -954,7 +1026,7 @@ export function OperatorLabRoute() {
                     void handleStopSession();
                   }}
                   tone="danger"
-                  disabled={stopSessionMutation.isPending}
+                  disabled={coreUnavailable || stopSessionMutation.isPending}
                 >
                   {stopSessionMutation.isPending ? "Stopping..." : "Stop"}
                 </Button>
@@ -1037,7 +1109,11 @@ export function OperatorLabRoute() {
                 <Button
                   tone="primary"
                   type="submit"
-                  disabled={!resolvedMarketScenario || publishMarketMutation.isPending}
+                  disabled={
+                    upstreamUnavailable ||
+                    !resolvedMarketScenario ||
+                    publishMarketMutation.isPending
+                  }
                 >
                   {publishMarketMutation.isPending ? "Publishing..." : "Publish latest"}
                 </Button>
@@ -1046,7 +1122,11 @@ export function OperatorLabRoute() {
                     void handleReplayMarket();
                   }}
                   tone="secondary"
-                  disabled={!resolvedMarketScenario || replayMarketMutation.isPending}
+                  disabled={
+                    upstreamUnavailable ||
+                    !resolvedMarketScenario ||
+                    replayMarketMutation.isPending
+                  }
                 >
                   {replayMarketMutation.isPending ? "Replaying..." : "Replay scenario"}
                 </Button>
@@ -1171,7 +1251,11 @@ export function OperatorLabRoute() {
                 <Button
                   tone="primary"
                   type="submit"
-                  disabled={!resolvedStrategyScenario || publishSignalsMutation.isPending}
+                  disabled={
+                    upstreamUnavailable ||
+                    !resolvedStrategyScenario ||
+                    publishSignalsMutation.isPending
+                  }
                 >
                   {publishSignalsMutation.isPending ? "Publishing..." : "Publish slice"}
                 </Button>
@@ -1180,7 +1264,11 @@ export function OperatorLabRoute() {
                     void handleReplaySignals();
                   }}
                   tone="secondary"
-                  disabled={!resolvedStrategyScenario || replaySignalsMutation.isPending}
+                  disabled={
+                    upstreamUnavailable ||
+                    !resolvedStrategyScenario ||
+                    replaySignalsMutation.isPending
+                  }
                 >
                   {replaySignalsMutation.isPending ? "Replaying..." : "Replay all"}
                 </Button>
@@ -1262,6 +1350,7 @@ export function OperatorLabRoute() {
                 tone="primary"
                 type="submit"
                 disabled={
+                  coreUnavailable ||
                   manualSignalMutation.isPending ||
                   !manualStrategyId.trim() ||
                   !manualSignalId.trim() ||
@@ -1361,32 +1450,38 @@ export function OperatorLabRoute() {
             <div className="grid gap-3">
               <StatusCallout
                 description={
-                  currentSessionQuery.isError
+                  coreUnavailable
+                    ? "Core health checks are failing, so current-session state cannot be trusted yet."
+                    : currentSessionQuery.isError
                     ? formatErrorMessage(currentSessionQuery.error)
                     : currentSessionQuery.data
                       ? `${currentSessionQuery.data.id} last changed at ${formatDateTime(currentSessionQuery.data.last_event_at)}.`
                       : "Session query has not resolved yet."
                 }
                 title="Paper session"
-                tone={currentSessionQuery.isError ? "danger" : "info"}
+                tone={coreUnavailable || currentSessionQuery.isError ? "danger" : "success"}
               />
               <StatusCallout
                 description={
-                  marketScenariosQuery.isError
+                  dataUnavailable
+                    ? "Data health checks are failing, so market replay catalogs are temporarily unavailable."
+                    : marketScenariosQuery.isError
                     ? formatErrorMessage(marketScenariosQuery.error)
                     : `${marketCatalogReady} market scenarios available.`
                 }
                 title="Market scenario catalog"
-                tone={marketScenariosQuery.isError ? "danger" : "success"}
+                tone={dataUnavailable || marketScenariosQuery.isError ? "danger" : "success"}
               />
               <StatusCallout
                 description={
-                  strategySignalsQuery.isError
+                  dataUnavailable
+                    ? "Data health checks are failing, so strategy preview data is temporarily unavailable."
+                    : strategySignalsQuery.isError
                     ? formatErrorMessage(strategySignalsQuery.error)
                     : `${strategySignalsQuery.data?.length ?? 0} source signals loaded for preview.`
                 }
                 title="Strategy signal catalog"
-                tone={strategySignalsQuery.isError ? "danger" : "success"}
+                tone={dataUnavailable || strategySignalsQuery.isError ? "danger" : "success"}
               />
             </div>
           </Panel>

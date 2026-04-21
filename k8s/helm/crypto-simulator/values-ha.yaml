@@ -1,0 +1,24 @@
+dataPipeline:
+  replicaCount: 2
+
+simulatorUi:
+  replicaCount: 2
+
+podDisruptionBudget:
+  dataPipeline:
+    enabled: true
+    minAvailable: 1
+  simulatorUi:
+    enabled: true
+    minAvailable: 1
+
+autoscaling:
+  dataPipeline:
+    enabled: true
+    minReplicas: 2
+    maxReplicas: 6
+    targetCPUUtilizationPercentage: 70
+    targetMemoryUtilizationPercentage: 75
+
+opsBenchmark:
+  enabled: true

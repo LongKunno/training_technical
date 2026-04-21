@@ -1,0 +1,49 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: {{ include "crypto-simulator.botRunnerServiceName" . }}
+  labels:
+    {{- include "crypto-simulator.labels" . | nindent 4 }}
+    app.kubernetes.io/component: bot-runner
+spec:
+  minReadySeconds: {{ .Values.deploymentDefaults.minReadySeconds }}
+  revisionHistoryLimit: {{ .Values.deploymentDefaults.revisionHistoryLimit }}
+  strategy:
+    {{- toYaml .Values.deploymentDefaults.strategy | nindent 4 }}
+  replicas: {{ .Values.botRunner.replicaCount }}
+  selector:
+    matchLabels:
+      {{- include "crypto-simulator.selectorLabels" . | nindent 6 }}
+      app.kubernetes.io/component: bot-runner
+  template:
+    metadata:
+      labels:
+        {{- include "crypto-simulator.selectorLabels" . | nindent 8 }}
+        app.kubernetes.io/component: bot-runner
+    spec:
+      containers:
+        - name: bot-runner
+          image: "{{ .Values.botRunner.image.repository }}:{{ .Values.botRunner.image.tag }}"
+          imagePullPolicy: {{ .Values.botRunner.image.pullPolicy }}
+          envFrom:
+            - configMapRef:
+                name: {{ include "crypto-simulator.configMapName" . }}
+          ports:
+            - name: http
+              containerPort: {{ .Values.botRunner.service.port }}
+          readinessProbe:
+            httpGet:
+              path: /health
+              port: http
+            initialDelaySeconds: 5
+            periodSeconds: 5
+            timeoutSeconds: 5
+          livenessProbe:
+            httpGet:
+              path: /health
+              port: http
+            initialDelaySeconds: 15
+            periodSeconds: 10
+            timeoutSeconds: 5
+          resources:
+            {{- toYaml .Values.botRunner.resources | nindent 12 }}
