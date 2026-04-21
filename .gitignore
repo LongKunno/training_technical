@@ -15,6 +15,7 @@ htmlcov/
 .env
 .venv/
 .codex
+.tooling/
 
 # Frontend local artifacts
 services/simulator-ui/node_modules/
