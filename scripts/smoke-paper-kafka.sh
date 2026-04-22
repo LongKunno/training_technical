@@ -52,6 +52,16 @@ until [ "$attempt" -ge 20 ]; do
   fi
 
   attempt=$((attempt + 1))
+  if [ $((attempt % 5)) -eq 0 ]; then
+    retry_publish_response=$(
+      curl -fsS \
+        -X POST \
+        http://data_pipeline:8000/api/data/market/quotes/publish \
+        -H 'Content-Type: application/json' \
+        -d '{"scenario":"baseline","symbols":["BTCUSDT"],"transport":"kafka"}'
+    )
+    printf '%s' "$retry_publish_response" | jq -e '.transports == ["kafka"]' >/dev/null
+  fi
   sleep 1
 done
 
