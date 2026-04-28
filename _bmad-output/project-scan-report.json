@@ -1,0 +1,79 @@
+{
+  "workflow_version": "1.2.0",
+  "timestamps": {
+    "started": "2026-04-28T15:54:33+07:00",
+    "last_updated": "2026-04-28T15:54:33+07:00"
+  },
+  "mode": "full_rescan",
+  "scan_level": "deep",
+  "project_root": "/home/long/Documents/project_private/training_technical/crypto-trading-simulator",
+  "project_knowledge": "/home/long/Documents/project_private/training_technical/crypto-trading-simulator/_bmad-output",
+  "completed_steps": [
+    {
+      "step": "step_1",
+      "status": "completed",
+      "timestamp": "2026-04-28T15:54:33+07:00",
+      "summary": "Phan loai repo la multi-service monorepo gom Go core, Python data pipeline, Python bot runner, React/Vite UI va Helm/K8s infra."
+    },
+    {
+      "step": "step_2",
+      "status": "completed",
+      "timestamp": "2026-04-28T15:54:33+07:00",
+      "summary": "Chuyen shared project knowledge tu legacy docs sang _bmad-output va danh dau docs khong con dung trong repo workflow."
+    },
+    {
+      "step": "step_3",
+      "status": "completed",
+      "timestamp": "2026-04-28T15:54:33+07:00",
+      "summary": "Cap nhat BMad artifacts cho architecture, contracts, source tree, roadmap, progress, sprint status, verification matrix va project context."
+    }
+  ],
+  "current_step": "complete",
+  "findings": {
+    "project_classification": "Multi-service monorepo: backend Go, backend/data Python, backend runner Python, web React/Vite UI, infra Helm/K8s.",
+    "source_of_truth": "_bmad-output thay the docs lam shared BMad project knowledge.",
+    "runtime": "Runtime local chinh la kind + Helm; Docker Compose giu vai tro fallback va quality gate path.",
+    "state_boundary": "core_trading van la singleton/stateful; data_pipeline la workload an toan cho HPA demo."
+  },
+  "project_types": [
+    {
+      "part_id": "core-trading-go",
+      "project_type_id": "backend",
+      "display_name": "Go paper trading va simulation coordinator"
+    },
+    {
+      "part_id": "data-pipeline-py",
+      "project_type_id": "data",
+      "display_name": "Python mock market va strategy data service"
+    },
+    {
+      "part_id": "bot-runner-py",
+      "project_type_id": "backend",
+      "display_name": "Python internal formula bot runner"
+    },
+    {
+      "part_id": "simulator-ui",
+      "project_type_id": "web",
+      "display_name": "React/Vite operator UI"
+    },
+    {
+      "part_id": "k8s-runtime",
+      "project_type_id": "infra",
+      "display_name": "Helm/kind local runtime"
+    }
+  ],
+  "outputs_generated": [
+    "index.md",
+    "project-context.md",
+    "planning-artifacts/project-overview.md",
+    "planning-artifacts/architecture.md",
+    "planning-artifacts/api-contracts.md",
+    "planning-artifacts/source-tree.md",
+    "planning-artifacts/roadmap.md",
+    "implementation-artifacts/progress-tracker.md",
+    "implementation-artifacts/sprint-status.yaml",
+    "test-artifacts/verification-matrix.md",
+    "project-scan-report.json"
+  ],
+  "resume_instructions": "BMad project documentation rescan da hoan tat. Cac lan cap nhat tri thuc tiep theo tiep tuc trong _bmad-output."
+}

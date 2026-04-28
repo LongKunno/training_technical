@@ -48,6 +48,10 @@ export interface RunMetricsSummary {
   rejected_signals: number;
   fees_paid: number;
   slippage_cost: number;
+  fill_ratio?: number;
+  average_slippage_bps?: number;
+  stopped_orders?: number;
+  cancel_rate?: number;
   realized_pnl: number;
   unrealized_pnl: number;
   total_pnl: number;
@@ -176,7 +180,13 @@ export interface ExperimentSummaryRow {
   avg_total_pnl: number;
   best_total_pnl: number;
   worst_total_pnl: number;
+  stddev_total_pnl?: number;
+  confidence_interval_95_total_pnl?: number;
   avg_max_drawdown: number;
+  avg_fill_ratio?: number;
+  avg_slippage_bps?: number;
+  avg_cancel_rate?: number;
+  failure_rate?: number;
 }
 
 export interface LeaderboardEntry extends RunSummary {

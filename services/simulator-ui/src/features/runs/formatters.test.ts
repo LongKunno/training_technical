@@ -12,7 +12,11 @@ import {
 describe("runs formatters", () => {
   it("maps run statuses to badges and activity flags", () => {
     expect(formatRunStatus("starting")).toBe("Starting");
+    expect(getRunStatusTone("queued")).toBe("info");
+    expect(getRunStatusTone("starting")).toBe("info");
     expect(getRunStatusTone("running")).toBe("success");
+    expect(getRunStatusTone("completed")).toBe("success");
+    expect(getRunStatusTone("stopped")).toBe("warning");
     expect(getRunStatusTone("failed")).toBe("danger");
     expect(isActiveRunStatus("running")).toBe(true);
     expect(isActiveRunStatus("completed")).toBe(false);

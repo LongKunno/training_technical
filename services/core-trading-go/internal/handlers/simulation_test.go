@@ -161,6 +161,95 @@ func TestSimulationRunsHandlerDecodesExecutionProfileCreateRequest(t *testing.T)
 	}
 }
 
+func TestSimulationRunDetailHandlerReturnsContractSnapshots(t *testing.T) {
+	t.Parallel()
+
+	completedAt := time.Date(2026, 4, 25, 9, 30, 0, 0, time.UTC)
+	service := &fakeSimulationService{
+		run: simulation.RunDetail{
+			RunSummary: simulation.RunSummary{
+				RunID:       "sim-run-detail",
+				BotID:       "moving-average-cross",
+				BotName:     "Moving Average Cross",
+				BotVersion:  "v1",
+				ScenarioID:  "range-chop",
+				SessionID:   "paper-session-detail",
+				Status:      simulation.RunStatusCompleted,
+				StartedAt:   completedAt.Add(-30 * time.Minute),
+				CompletedAt: &completedAt,
+				UpdatedAt:   completedAt,
+			},
+			ConfigSnapshot: map[string]any{
+				"fast_window":    float64(2),
+				"slow_window":    float64(4),
+				"trade_notional": float64(750),
+			},
+			ExecutionProfileSnapshot: simulation.ExecutionProfile{
+				InitialBalance: 15000,
+				FeeRate:        0.0015,
+				SlippageRate:   0.0025,
+				RiskControls: papertrading.RiskControls{
+					AllowedSymbols:   []string{"BTCUSDT", "ETHUSDT"},
+					MaxOrderNotional: 5000,
+					MaxOpenNotional:  7000,
+				},
+			},
+			MarketProfileSnapshot: simulation.MarketMicrostructureProfile{
+				SignalLatencyTicks:     1,
+				SpreadBps:              5,
+				MaxFillNotionalPerTick: 1000,
+				LiquidityCurve: []simulation.LiquidityCurvePoint{
+					{MaxNotional: 1000, FillRatio: 0.5},
+				},
+				QueuePriority:         0.75,
+				MarketImpactBpsPer10k: 2.5,
+				CancelAfterTicks:      3,
+			},
+			MetricsSnapshot: &simulation.RunMetricsSummary{
+				FilledOrders: 2,
+				TotalPnL:     123.45,
+				MaxDrawdown:  12,
+			},
+			StoppedReason: "completed",
+		},
+	}
+
+	req := httptest.NewRequest(http.MethodGet, "/api/sim/runs/sim-run-detail", nil)
+	req.SetPathValue("runID", "sim-run-detail")
+	recorder := httptest.NewRecorder()
+
+	handlers.NewSimulationRunDetailHandler(service).ServeHTTP(recorder, req)
+
+	if recorder.Code != http.StatusOK {
+		t.Fatalf("expected status %d, got %d", http.StatusOK, recorder.Code)
+	}
+
+	var payload struct {
+		Run simulation.RunDetail `json:"run"`
+	}
+	if err := json.Unmarshal(recorder.Body.Bytes(), &payload); err != nil {
+		t.Fatalf("failed to decode run detail payload: %v", err)
+	}
+	if payload.Run.RunID != "sim-run-detail" || payload.Run.SessionID != "paper-session-detail" {
+		t.Fatalf("unexpected run identity in payload %+v", payload.Run.RunSummary)
+	}
+	if payload.Run.ConfigSnapshot["trade_notional"] != float64(750) {
+		t.Fatalf("expected config snapshot to survive response, got %+v", payload.Run.ConfigSnapshot)
+	}
+	if payload.Run.ExecutionProfileSnapshot.InitialBalance != 15000 || len(payload.Run.ExecutionProfileSnapshot.RiskControls.AllowedSymbols) != 2 {
+		t.Fatalf("expected execution profile snapshot, got %+v", payload.Run.ExecutionProfileSnapshot)
+	}
+	if payload.Run.MarketProfileSnapshot.CancelAfterTicks != 3 || len(payload.Run.MarketProfileSnapshot.LiquidityCurve) != 1 {
+		t.Fatalf("expected market profile snapshot, got %+v", payload.Run.MarketProfileSnapshot)
+	}
+	if payload.Run.MetricsSnapshot == nil || payload.Run.MetricsSnapshot.TotalPnL != 123.45 {
+		t.Fatalf("expected metrics snapshot, got %+v", payload.Run.MetricsSnapshot)
+	}
+	if payload.Run.StoppedReason != "completed" {
+		t.Fatalf("expected stopped reason completed, got %q", payload.Run.StoppedReason)
+	}
+}
+
 func TestSimulationLeaderboardHandlerParsesFilters(t *testing.T) {
 	t.Parallel()
 
@@ -379,7 +468,13 @@ func TestSimulationExperimentSummaryHandlerReturnsRows(t *testing.T) {
 				AvgTotalPnL:    150,
 				BestTotalPnL:   200,
 				WorstTotalPnL:  100,
+				StdDevTotalPnL: 70.71,
+				CI95TotalPnL:   98,
 				AvgMaxDrawdown: 12,
+				AvgFillRatio:   0.95,
+				AvgSlippageBps: 3.5,
+				AvgCancelRate:  0.05,
+				FailureRate:    0,
 			},
 		},
 	}
@@ -403,8 +498,103 @@ func TestSimulationExperimentSummaryHandlerReturnsRows(t *testing.T) {
 	if err := json.Unmarshal(recorder.Body.Bytes(), &payload); err != nil {
 		t.Fatalf("failed to decode summary payload: %v", err)
 	}
-	if len(payload.Rows) != 1 || payload.Rows[0].AvgTotalPnL != 150 {
+	if len(payload.Rows) != 1 || payload.Rows[0].AvgTotalPnL != 150 || payload.Rows[0].AvgFillRatio != 0.95 || payload.Rows[0].CI95TotalPnL != 98 {
 		t.Fatalf("unexpected summary payload %+v", payload.Rows)
+	}
+}
+
+func TestSimulationExperimentDetailHandlerReturnsContractShape(t *testing.T) {
+	t.Parallel()
+
+	now := time.Date(2026, 4, 25, 10, 0, 0, 0, time.UTC)
+	service := &fakeSimulationService{
+		experiment: simulation.ExperimentDetail{
+			ExperimentSummary: simulation.ExperimentSummary{
+				ExperimentID:  "sim-exp-detail",
+				Name:          "Matrix detail",
+				Status:        simulation.ExperimentStatusRunning,
+				PlannedRuns:   2,
+				CompletedRuns: 1,
+				ActiveRunID:   "sim-run-active",
+				QueuePosition: 1,
+				CreatedAt:     now.Add(-time.Hour),
+				StartedAt:     &now,
+				UpdatedAt:     now,
+			},
+			ExecutionProfileSnapshot: simulation.ExecutionProfile{
+				InitialBalance: 15000,
+				FeeRate:        0.0015,
+				SlippageRate:   0.0025,
+			},
+			Slots: []simulation.ExperimentRunSlot{
+				{
+					SlotIndex:      0,
+					Repetition:     1,
+					BotID:          "buy-and-hold",
+					BotName:        "Buy And Hold",
+					BotVersion:     "v1",
+					ScenarioID:     "trend-up",
+					ConfigSnapshot: map[string]any{"trade_notional": float64(500)},
+				},
+				{
+					SlotIndex:      1,
+					Repetition:     1,
+					BotID:          "moving-average-cross",
+					BotName:        "Moving Average Cross",
+					BotVersion:     "v1",
+					ScenarioID:     "range-chop",
+					ConfigSnapshot: map[string]any{"fast_window": float64(2), "slow_window": float64(4)},
+				},
+			},
+			CurrentIndex:  1,
+			StopRequested: false,
+			Runs: []simulation.RunSummary{
+				{
+					RunID:        "sim-run-completed",
+					ExperimentID: "sim-exp-detail",
+					BotID:        "buy-and-hold",
+					BotName:      "Buy And Hold",
+					BotVersion:   "v1",
+					ScenarioID:   "trend-up",
+					SessionID:    "paper-session-completed",
+					Status:       simulation.RunStatusCompleted,
+					StartedAt:    now.Add(-30 * time.Minute),
+					UpdatedAt:    now.Add(-10 * time.Minute),
+				},
+			},
+		},
+	}
+
+	req := httptest.NewRequest(http.MethodGet, "/api/sim/experiments/sim-exp-detail", nil)
+	req.SetPathValue("experimentID", "sim-exp-detail")
+	recorder := httptest.NewRecorder()
+
+	handlers.NewSimulationExperimentDetailHandler(service).ServeHTTP(recorder, req)
+
+	if recorder.Code != http.StatusOK {
+		t.Fatalf("expected status %d, got %d", http.StatusOK, recorder.Code)
+	}
+
+	var payload struct {
+		Experiment simulation.ExperimentDetail `json:"experiment"`
+	}
+	if err := json.Unmarshal(recorder.Body.Bytes(), &payload); err != nil {
+		t.Fatalf("failed to decode experiment detail payload: %v", err)
+	}
+	if payload.Experiment.ExperimentID != "sim-exp-detail" || payload.Experiment.QueuePosition != 1 {
+		t.Fatalf("unexpected experiment summary payload %+v", payload.Experiment.ExperimentSummary)
+	}
+	if payload.Experiment.ExecutionProfileSnapshot.InitialBalance != 15000 {
+		t.Fatalf("expected execution profile snapshot, got %+v", payload.Experiment.ExecutionProfileSnapshot)
+	}
+	if len(payload.Experiment.Slots) != 2 || payload.Experiment.Slots[1].ScenarioID != "range-chop" {
+		t.Fatalf("expected slot matrix in payload, got %+v", payload.Experiment.Slots)
+	}
+	if payload.Experiment.CurrentIndex != 1 || payload.Experiment.StopRequested {
+		t.Fatalf("expected coordinator state in payload, got current_index=%d stop_requested=%v", payload.Experiment.CurrentIndex, payload.Experiment.StopRequested)
+	}
+	if len(payload.Experiment.Runs) != 1 || payload.Experiment.Runs[0].ExperimentID != "sim-exp-detail" {
+		t.Fatalf("expected child run list in payload, got %+v", payload.Experiment.Runs)
 	}
 }
 

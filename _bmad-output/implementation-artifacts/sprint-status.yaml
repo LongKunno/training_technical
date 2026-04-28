@@ -1,0 +1,46 @@
+project: crypto-trading-simulator
+generated_at: "2026-04-28T15:54:33+07:00"
+source_of_truth: _bmad-output
+docs_policy:
+  legacy_docs_removed: true
+  shared_knowledge_base: _bmad-output
+  personal_bmad_overrides_ignored: true
+current_phase: implementation
+repository_type: multi-service-monorepo
+project_classification:
+  - part_id: core-trading-go
+    path: services/core-trading-go
+    project_type_id: backend
+    runtime: go
+  - part_id: data-pipeline-py
+    path: services/data-pipeline-py
+    project_type_id: backend-data
+    runtime: python-fastapi
+  - part_id: bot-runner-py
+    path: services/bot-runner-py
+    project_type_id: backend
+    runtime: python-fastapi
+  - part_id: simulator-ui
+    path: services/simulator-ui
+    project_type_id: web
+    runtime: react-vite-typescript
+  - part_id: k8s-runtime
+    path: k8s
+    project_type_id: infra
+    runtime: helm-kind
+status:
+  core_trading_go: implemented_dirty_worktree
+  data_pipeline_py: implemented_dirty_worktree
+  bot_runner_py: implemented_dirty_worktree
+  simulator_ui: implemented_dirty_worktree
+  k8s_helm: implemented_dirty_worktree
+  bmad_knowledge_base: updated
+next_recommended_actions:
+  - Chay Docker-only gates lien quan sau khi code changes on dinh.
+  - Cap nhat project knowledge trong _bmad-output.
+  - Khong tao lai docs/.
+  - Khi chuan bi commit, review README va cac artifact BMad lien quan.
+verification_policy:
+  docker_only_tests: true
+  do_not_run_host_go_test: true
+  do_not_run_host_pytest: true

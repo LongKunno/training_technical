@@ -28,6 +28,93 @@ func TestNewRouterHealthEndpoint(t *testing.T) {
 	}
 }
 
+func TestNewRouterStructuredRequestLogIncludesRequestIDAndSessionContext(t *testing.T) {
+	t.Parallel()
+
+	engine, err := papertrading.NewEngineWithStore("paper-account-1", 1000, papertrading.SimulationRules{}, nil)
+	if err != nil {
+		t.Fatalf("failed to create paper trading engine: %v", err)
+	}
+
+	var logs bytes.Buffer
+	router := server.NewRouterWithRequestLogWriter(engine, nil, &logs)
+	req := httptest.NewRequest(http.MethodGet, "/api/paper/session?session_id=session-log", nil)
+	req.Header.Set("x-request-id", "core-request-1")
+	recorder := httptest.NewRecorder()
+
+	router.ServeHTTP(recorder, req)
+
+	if recorder.Code != http.StatusOK {
+		t.Fatalf("expected status %d, got %d", http.StatusOK, recorder.Code)
+	}
+	if recorder.Header().Get("x-request-id") != "core-request-1" {
+		t.Fatalf("expected propagated request id, got %q", recorder.Header().Get("x-request-id"))
+	}
+
+	payload := latestStructuredLogPayload(t, logs.String())
+	if payload["event"] != "http_request" {
+		t.Fatalf("unexpected event %v", payload["event"])
+	}
+	if payload["service"] != "core_trading" {
+		t.Fatalf("unexpected service %v", payload["service"])
+	}
+	if payload["request_id"] != "core-request-1" {
+		t.Fatalf("unexpected request id %v", payload["request_id"])
+	}
+	if payload["method"] != http.MethodGet {
+		t.Fatalf("unexpected method %v", payload["method"])
+	}
+	if payload["path"] != "/api/paper/session" {
+		t.Fatalf("unexpected path %v", payload["path"])
+	}
+	if payload["status"] != float64(http.StatusOK) {
+		t.Fatalf("unexpected status %v", payload["status"])
+	}
+	if payload["session_id"] != "session-log" {
+		t.Fatalf("unexpected session_id %v", payload["session_id"])
+	}
+	if _, ok := payload["duration_ms"].(float64); !ok {
+		t.Fatalf("expected numeric duration_ms, got %T", payload["duration_ms"])
+	}
+}
+
+func TestStructuredRequestLogIncludesPathContextIDs(t *testing.T) {
+	t.Parallel()
+
+	mux := http.NewServeMux()
+	mux.HandleFunc("POST /api/sim/experiments/{experimentID}/stop", func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(http.StatusNoContent)
+	})
+
+	var logs bytes.Buffer
+	router := server.WithStructuredRequestLogging(mux, &logs)
+	req := httptest.NewRequest(http.MethodPost, "/api/sim/experiments/experiment-path/stop?run_id=run-query", nil)
+	recorder := httptest.NewRecorder()
+
+	router.ServeHTTP(recorder, req)
+
+	if recorder.Code != http.StatusNoContent {
+		t.Fatalf("expected status %d, got %d", http.StatusNoContent, recorder.Code)
+	}
+	if recorder.Header().Get("x-request-id") == "" {
+		t.Fatal("expected generated request id response header")
+	}
+
+	payload := latestStructuredLogPayload(t, logs.String())
+	if payload["path"] != "/api/sim/experiments/experiment-path/stop" {
+		t.Fatalf("unexpected path %v", payload["path"])
+	}
+	if payload["experiment_id"] != "experiment-path" {
+		t.Fatalf("unexpected experiment_id %v", payload["experiment_id"])
+	}
+	if payload["run_id"] != "run-query" {
+		t.Fatalf("unexpected run_id %v", payload["run_id"])
+	}
+	if payload["status"] != float64(http.StatusNoContent) {
+		t.Fatalf("unexpected status %v", payload["status"])
+	}
+}
+
 func TestNewRouterPaperAccountEndpoint(t *testing.T) {
 	t.Parallel()
 
@@ -219,11 +306,23 @@ func TestNewRouterPaperOrdersHistoryEndpoint(t *testing.T) {
 	t.Parallel()
 
 	router := newTestRouter(t, 1000)
+	sessionReq := httptest.NewRequest(http.MethodGet, "/api/paper/session", nil)
+	sessionRecorder := httptest.NewRecorder()
+	router.ServeHTTP(sessionRecorder, sessionReq)
+	if sessionRecorder.Code != http.StatusOK {
+		t.Fatalf("expected session status %d, got %d", http.StatusOK, sessionRecorder.Code)
+	}
+	var sessionPayload struct {
+		Session papertrading.SimulationSession `json:"session"`
+	}
+	if err := json.Unmarshal(sessionRecorder.Body.Bytes(), &sessionPayload); err != nil {
+		t.Fatalf("failed to decode session response: %v", err)
+	}
 
 	postJSON(t, router, "/api/paper/orders", `{"symbol":"BTCUSDT","side":"buy","quantity":1,"price":100}`)
 	postJSON(t, router, "/api/paper/orders", `{"symbol":"ETHUSDT","side":"buy","quantity":1,"price":50}`)
 
-	req := httptest.NewRequest(http.MethodGet, "/api/paper/orders?symbol=BTCUSDT&limit=10&offset=0", nil)
+	req := httptest.NewRequest(http.MethodGet, "/api/paper/orders?session_id="+sessionPayload.Session.ID+"&symbol=BTCUSDT&limit=10&offset=0", nil)
 	recorder := httptest.NewRecorder()
 	router.ServeHTTP(recorder, req)
 
@@ -245,6 +344,9 @@ func TestNewRouterPaperOrdersHistoryEndpoint(t *testing.T) {
 
 	if payload.Orders[0].Symbol != "BTCUSDT" {
 		t.Fatalf("unexpected symbol %q", payload.Orders[0].Symbol)
+	}
+	if payload.Orders[0].SessionID != sessionPayload.Session.ID {
+		t.Fatalf("expected order session %q, got %q", sessionPayload.Session.ID, payload.Orders[0].SessionID)
 	}
 }
 
@@ -748,4 +850,19 @@ func postAnyJSON(t *testing.T, router http.Handler, path string, body string) *h
 	router.ServeHTTP(recorder, req)
 
 	return recorder
+}
+
+func latestStructuredLogPayload(t *testing.T, raw string) map[string]any {
+	t.Helper()
+
+	lines := strings.Split(strings.TrimSpace(raw), "\n")
+	if len(lines) == 0 || lines[0] == "" {
+		t.Fatal("expected structured log output")
+	}
+
+	var payload map[string]any
+	if err := json.Unmarshal([]byte(lines[len(lines)-1]), &payload); err != nil {
+		t.Fatalf("failed to decode structured log: %v", err)
+	}
+	return payload
 }

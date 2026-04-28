@@ -2,6 +2,10 @@
 
 set -eu
 
+SMOKE_SCRIPT_DIR=$(dirname "$0")
+. "${SMOKE_SCRIPT_DIR}/smoke-artifacts.sh"
+SMOKE_STARTED_AT=$(smoke_started_at)
+
 wait_for_url() {
   url="$1"
   attempts=0
@@ -64,3 +68,13 @@ printf '%s' "$audit_response" | jq -e '.events | length >= 8' >/dev/null
 
 timeline_response=$(curl -fsS "http://core_trading:8080/api/paper/timeline?session_id=${session_id}")
 printf '%s' "$timeline_response" | jq -e '.timeline | length >= 5' >/dev/null
+
+smoke_write_artifact \
+  "simulation-run" \
+  "passed" \
+  '{run_id: $run_id, session_id: $session_id, filled_orders: ($report_response | fromjson | .report.filled_orders), audit_events: ($audit_response | fromjson | .events | length), timeline_points: ($timeline_response | fromjson | .timeline | length)}' \
+  --arg run_id "$run_id" \
+  --arg session_id "$session_id" \
+  --arg report_response "$report_response" \
+  --arg audit_response "$audit_response" \
+  --arg timeline_response "$timeline_response"

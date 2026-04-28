@@ -2,6 +2,10 @@
 
 set -eu
 
+SMOKE_SCRIPT_DIR=$(dirname "$0")
+. "${SMOKE_SCRIPT_DIR}/smoke-artifacts.sh"
+SMOKE_STARTED_AT=$(smoke_started_at)
+
 wait_for_url() {
   url="$1"
   attempts=0
@@ -107,3 +111,13 @@ for experiment_run_id in $(printf '%s' "$child_runs_response" | jq -r '.runs[].r
     exit 1
   fi
 done
+
+smoke_write_artifact \
+  "simulation-experiment" \
+  "passed" \
+  '{standalone_run_id: $standalone_run_id, experiment_id: $experiment_id, child_run_count: ($child_runs_response | fromjson | .runs | length), completed_runs: ($experiment_detail | fromjson | .experiment.completed_runs), summary_rows: ($summary_response | fromjson | .rows | length), avg_total_pnl: ($summary_response | fromjson | .rows[0].avg_total_pnl), confidence_interval_95_total_pnl: ($summary_response | fromjson | .rows[0].confidence_interval_95_total_pnl)}' \
+  --arg standalone_run_id "$standalone_run_id" \
+  --arg experiment_id "$experiment_id" \
+  --arg child_runs_response "$child_runs_response" \
+  --arg experiment_detail "$experiment_detail" \
+  --arg summary_response "$summary_response"

@@ -7,9 +7,25 @@ export interface TimelinePoint {
   value: number;
 }
 
+export interface SparklinePoint {
+  label: string;
+  value: number;
+}
+
 export interface DistributionPoint {
   label: string;
   value: number;
+}
+
+export interface HorizontalBarPoint {
+  label: string;
+  value: number;
+}
+
+export interface StackedStatusPoint {
+  label: string;
+  value: number;
+  color?: string;
 }
 
 export function createTimelineAreaOption(points: TimelinePoint[]): EChartsOption {
@@ -81,6 +97,68 @@ export function createTimelineAreaOption(points: TimelinePoint[]): EChartsOption
   };
 }
 
+export function createSparklineOption(
+  points: SparklinePoint[],
+  options: {
+    color?: string;
+    formatter?: (value: number) => string;
+  } = {},
+): EChartsOption {
+  const lineColor = options.color ?? chartTheme.palette[0];
+
+  return {
+    animationDuration: 350,
+    grid: {
+      left: 0,
+      right: 0,
+      top: 4,
+      bottom: 2,
+      containLabel: false,
+    },
+    tooltip: {
+      trigger: "axis",
+      backgroundColor: "rgba(7, 16, 27, 0.92)",
+      borderColor: "rgba(126, 203, 255, 0.2)",
+      textStyle: {
+        color: "#eef6ff",
+      },
+    },
+    xAxis: {
+      type: "category",
+      boundaryGap: false,
+      data: points.map((point) => point.label),
+      axisLine: { show: false },
+      axisTick: { show: false },
+      axisLabel: { show: false },
+    },
+    yAxis: {
+      type: "value",
+      splitLine: { show: false },
+      axisLine: { show: false },
+      axisTick: { show: false },
+      axisLabel: { show: false },
+    },
+    series: [
+      {
+        type: "line",
+        smooth: true,
+        symbol: "none",
+        lineStyle: {
+          width: 2,
+          color: lineColor,
+        },
+        areaStyle: {
+          color: createLinearGradient(0, 0, 0, 1, [
+            { offset: 0, color: `${lineColor}55` },
+            { offset: 1, color: `${lineColor}00` },
+          ]),
+        },
+        data: points.map((point) => point.value),
+      },
+    ],
+  };
+}
+
 export function createDistributionBarOption(points: DistributionPoint[]): EChartsOption {
   return {
     animationDuration: 500,
@@ -134,5 +212,131 @@ export function createDistributionBarOption(points: DistributionPoint[]): EChart
         },
       },
     ],
+  };
+}
+
+export function createHorizontalBarOption(
+  points: HorizontalBarPoint[],
+  _options: {
+    formatter?: (value: number) => string;
+  } = {},
+): EChartsOption {
+  void _options;
+
+  return {
+    animationDuration: 500,
+    grid: {
+      left: 10,
+      right: 12,
+      top: 12,
+      bottom: 8,
+      containLabel: true,
+    },
+    tooltip: {
+      trigger: "axis",
+      axisPointer: { type: "shadow" },
+      backgroundColor: "rgba(7, 16, 27, 0.92)",
+      borderColor: "rgba(66, 217, 186, 0.2)",
+      textStyle: {
+        color: "#eef6ff",
+      },
+    },
+    xAxis: {
+      type: "value",
+      splitLine: { lineStyle: { color: chartTheme.axisSplit } },
+      axisLine: { show: false },
+      axisTick: { show: false },
+      axisLabel: {
+        color: chartTheme.axisLabel,
+        fontSize: 11,
+      },
+    },
+    yAxis: {
+      type: "category",
+      data: points.map((point) => point.label),
+      axisLine: { show: false },
+      axisTick: { show: false },
+      axisLabel: {
+        color: chartTheme.axisLabel,
+        fontSize: 11,
+      },
+    },
+    series: [
+      {
+        type: "bar",
+        barWidth: 14,
+        data: points.map((point, index) => ({
+          value: point.value,
+          itemStyle: {
+            borderRadius: [0, 999, 999, 0],
+            color: createLinearGradient(1, 0, 0, 0, [
+              { offset: 0, color: chartTheme.palette[index % chartTheme.palette.length] },
+              { offset: 1, color: `${chartTheme.palette[index % chartTheme.palette.length]}66` },
+            ]),
+          },
+        })),
+      },
+    ],
+  };
+}
+
+export function createStackedStatusBarOption(points: StackedStatusPoint[]): EChartsOption {
+  return {
+    animationDuration: 500,
+    color: points.map((point, index) => point.color ?? chartTheme.palette[index % chartTheme.palette.length]),
+    grid: {
+      left: 4,
+      right: 4,
+      top: 22,
+      bottom: 6,
+      containLabel: false,
+    },
+    legend: {
+      top: 0,
+      icon: "roundRect",
+      itemWidth: 10,
+      itemHeight: 10,
+      textStyle: {
+        color: chartTheme.axisLabel,
+        fontSize: 11,
+      },
+    },
+    tooltip: {
+      trigger: "item",
+      backgroundColor: "rgba(7, 16, 27, 0.92)",
+      borderColor: "rgba(126, 203, 255, 0.2)",
+      textStyle: {
+        color: "#eef6ff",
+      },
+    },
+    xAxis: {
+      type: "value",
+      max: Math.max(
+        points.reduce((total, point) => total + point.value, 0),
+        1,
+      ),
+      axisLine: { show: false },
+      axisTick: { show: false },
+      axisLabel: { show: false },
+      splitLine: { show: false },
+    },
+    yAxis: {
+      type: "category",
+      data: [""],
+      axisLine: { show: false },
+      axisTick: { show: false },
+      axisLabel: { show: false },
+    },
+    series: points.map((point) => ({
+      type: "bar",
+      name: point.label,
+      stack: "status",
+      barWidth: 18,
+      emphasis: { focus: "series" },
+      itemStyle: {
+        borderRadius: 999,
+      },
+      data: [point.value],
+    })),
   };
 }

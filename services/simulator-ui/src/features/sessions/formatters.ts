@@ -54,6 +54,10 @@ const integerFormatter = new Intl.NumberFormat("en-US", {
   maximumFractionDigits: 0,
 });
 
+const decimalFormatter = new Intl.NumberFormat("en-US", {
+  maximumFractionDigits: 2,
+});
+
 const DEFAULT_SESSION_FILTER: Required<SessionHistoryFilter> = {
   limit: 20,
   offset: 0,
@@ -163,6 +167,14 @@ export function formatInteger(value: number): string {
   return integerFormatter.format(value);
 }
 
+export function formatPercentRatio(value?: number | null): string {
+  return `${(Number(value ?? 0) * 100).toFixed(1)}%`;
+}
+
+export function formatBps(value?: number | null): string {
+  return `${decimalFormatter.format(Number(value ?? 0))} bps`;
+}
+
 export function formatDateTime(value?: string): string {
   if (!value) {
     return "In progress";
@@ -200,7 +212,15 @@ export function formatEventType(type: string): string {
 }
 
 export function getStatusTone(status: SessionStatus | "") {
-  return status === "running" ? "success" : "neutral";
+  if (status === "running") {
+    return "success";
+  }
+
+  if (status === "stopped") {
+    return "warning";
+  }
+
+  return "neutral";
 }
 
 export function getAuditTone(event: AuditEvent["type"]) {
@@ -307,5 +327,9 @@ export function getReportMetrics(report: SessionReport) {
     ["Rejected signals", formatInteger(report.rejected_signals)],
     ["Fees paid", formatCurrency(report.fees_paid)],
     ["Slippage cost", formatCurrency(report.slippage_cost)],
+    ["Fill ratio", formatPercentRatio(report.fill_ratio)],
+    ["Average slippage", formatBps(report.average_slippage_bps)],
+    ["Stopped orders", formatInteger(report.stopped_orders ?? 0)],
+    ["Cancel rate", formatPercentRatio(report.cancel_rate)],
   ] as const;
 }

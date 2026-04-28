@@ -130,6 +130,7 @@ async function mockHealthEndpoint(
 export async function mockPlatformHealth(
   page: Page,
   options: {
+    bot?: MockHealthState;
     core?: MockHealthState;
     data?: MockHealthState;
   } = {},
@@ -140,6 +141,12 @@ export async function mockPlatformHealth(
     "**/data/health",
     "Data Pipeline (Python)",
     options.data ?? "healthy",
+  );
+  await mockHealthEndpoint(
+    page,
+    "**/bot/health",
+    "Bot Runner (Python)",
+    options.bot ?? "healthy",
   );
 }
 

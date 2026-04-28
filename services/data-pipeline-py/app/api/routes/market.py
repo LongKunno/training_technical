@@ -2,11 +2,17 @@ import asyncio
 
 from fastapi import APIRouter, HTTPException, Request
 
+from app.core.structured_logging import set_request_log_context
 from app.schemas.market import PublishQuotesRequest, ReplayQuotesRequest
 from app.services.market_data import MockMarketDataService
 from app.services.publisher import MarketDataPublisher
 
 router = APIRouter(prefix="/api/data/market/quotes", tags=["market-data"])
+
+
+def _ensure_scenario_exists(service: MockMarketDataService, scenario: str) -> None:
+    if scenario not in service.scenarios():
+        raise HTTPException(status_code=404, detail=f"scenario not found: {scenario}")
 
 
 @router.get("/latest")
@@ -16,6 +22,8 @@ async def latest_quote(
     scenario: str = "baseline",
 ) -> dict[str, object]:
     service: MockMarketDataService = request.app.state.market_data_service
+    _ensure_scenario_exists(service, scenario)
+    set_request_log_context(request, scenario=scenario, symbol=symbol)
 
     try:
         quote = service.latest_quote(symbol, scenario=scenario)
@@ -28,14 +36,18 @@ async def latest_quote(
 @router.get("/replay/scenarios")
 async def list_scenarios(request: Request) -> dict[str, object]:
     service: MockMarketDataService = request.app.state.market_data_service
-    return {"scenarios": service.scenarios()}
+    scenarios = service.scenarios()
+    set_request_log_context(request, scenario_count=len(scenarios))
+    return {"scenarios": scenarios}
 
 
 @router.get("/replay/catalog")
 async def list_scenario_catalog(request: Request) -> dict[str, object]:
     service: MockMarketDataService = request.app.state.market_data_service
+    scenarios = service.scenario_catalog()
+    set_request_log_context(request, scenario_count=len(scenarios))
     return {
-        "scenarios": [scenario.model_dump(mode="json") for scenario in service.scenario_catalog()],
+        "scenarios": [scenario.model_dump(mode="json") for scenario in scenarios],
     }
 
 
@@ -47,6 +59,7 @@ async def get_scenario_catalog_entry(scenario_id: str, request: Request) -> dict
     except KeyError as exc:
         raise HTTPException(status_code=404, detail=f"scenario not found: {scenario_id}") from exc
 
+    set_request_log_context(request, scenario=scenario_id)
     return {"scenario": scenario.model_dump(mode="json")}
 
 
@@ -57,9 +70,16 @@ async def list_replay_ticks(
     symbol: list[str] | None = None,
 ) -> dict[str, object]:
     service: MockMarketDataService = request.app.state.market_data_service
+    _ensure_scenario_exists(service, scenario)
     ticks = service.replay_ticks(
         scenario=scenario,
         symbols=symbol,
+    )
+    set_request_log_context(
+        request,
+        scenario=scenario,
+        symbol=symbol,
+        tick_count=len(ticks),
     )
 
     return {
@@ -78,9 +98,20 @@ async def publish_quotes(
     publisher: MarketDataPublisher = request.app.state.market_data_publisher
 
     payload = body or PublishQuotesRequest()
+    set_request_log_context(
+        request,
+        scenario=payload.scenario,
+        symbol=payload.symbols,
+        transport=payload.transport,
+    )
+    _ensure_scenario_exists(service, payload.scenario)
     latest_ticks = service.latest_quotes(
         scenario=payload.scenario,
         symbols=payload.symbols,
+    )
+    set_request_log_context(
+        request,
+        tick_count=len(latest_ticks),
     )
     try:
         result = await publisher.publish_ticks_with_transport(latest_ticks, payload.transport)
@@ -106,9 +137,21 @@ async def replay_quotes(
     service: MockMarketDataService = request.app.state.market_data_service
     publisher: MarketDataPublisher = request.app.state.market_data_publisher
 
+    set_request_log_context(
+        request,
+        scenario=body.scenario,
+        speed_multiplier=body.speed_multiplier,
+        symbol=body.symbols,
+        transport=body.transport,
+    )
+    _ensure_scenario_exists(service, body.scenario)
     ticks = service.replay_ticks(
         scenario=body.scenario,
         symbols=body.symbols,
+    )
+    set_request_log_context(
+        request,
+        tick_count=len(ticks),
     )
     published_count = 0
     previous_timestamp = None
@@ -132,6 +175,7 @@ async def replay_quotes(
         published_count += 1
         previous_timestamp = tick.timestamp
 
+    set_request_log_context(request, published_count=published_count)
     return {
         "scenario": body.scenario,
         "published_count": published_count,

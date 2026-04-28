@@ -3,6 +3,7 @@ from dataclasses import dataclass
 
 import httpx
 from aiokafka import AIOKafkaProducer
+from aiokafka.errors import KafkaError
 
 from app.schemas.market import PriceTick
 
@@ -31,12 +32,7 @@ class MarketDataPublisher:
         }
         transports: list[str] = []
 
-        async with httpx.AsyncClient(timeout=5.0) as client:
-            response = await client.post(
-                f"{self._core_trading_internal_base_url}/internal/market/prices",
-                json=payload,
-            )
-            response.raise_for_status()
+        await self._publish_to_core(payload)
         transports.append("http")
 
         if self._kafka_bootstrap_servers:
@@ -63,12 +59,7 @@ class MarketDataPublisher:
             raise ValueError("invalid transport")
 
         if transport in {"http", "both"}:
-            async with httpx.AsyncClient(timeout=5.0) as client:
-                response = await client.post(
-                    f"{self._core_trading_internal_base_url}/internal/market/prices",
-                    json=payload,
-                )
-                response.raise_for_status()
+            await self._publish_to_core(payload)
             transports.append("http")
 
         if transport in {"kafka", "both"}:
@@ -83,14 +74,28 @@ class MarketDataPublisher:
             transports=transports,
         )
 
-    async def _publish_to_kafka(self, ticks: list[dict[str, object]]) -> None:
-        producer = AIOKafkaProducer(bootstrap_servers=self._kafka_bootstrap_servers)
-        await producer.start()
+    async def _publish_to_core(self, payload: dict[str, object]) -> None:
         try:
-            for tick in ticks:
-                await producer.send_and_wait(
-                    self._kafka_topic,
-                    json.dumps(tick).encode("utf-8"),
+            async with httpx.AsyncClient(timeout=5.0) as client:
+                response = await client.post(
+                    f"{self._core_trading_internal_base_url}/internal/market/prices",
+                    json=payload,
                 )
-        finally:
-            await producer.stop()
+                response.raise_for_status()
+        except httpx.HTTPError as exc:
+            raise RuntimeError(f"core trading market publish failed: {exc}") from exc
+
+    async def _publish_to_kafka(self, ticks: list[dict[str, object]]) -> None:
+        try:
+            producer = AIOKafkaProducer(bootstrap_servers=self._kafka_bootstrap_servers)
+            await producer.start()
+            try:
+                for tick in ticks:
+                    await producer.send_and_wait(
+                        self._kafka_topic,
+                        json.dumps(tick).encode("utf-8"),
+                    )
+            finally:
+                await producer.stop()
+        except KafkaError as exc:
+            raise RuntimeError(f"kafka market publish failed: {exc}") from exc

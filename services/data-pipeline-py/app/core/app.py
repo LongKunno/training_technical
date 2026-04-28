@@ -2,6 +2,7 @@ from fastapi import FastAPI
 
 from app.api.router import api_router
 from app.core.config import Settings
+from app.core.structured_logging import add_structured_request_logging
 from app.services.market_data import MockMarketDataService
 from app.services.publisher import MarketDataPublisher
 from app.services.signal_publisher import SignalPublisher
@@ -37,6 +38,7 @@ def create_app(
     app.state.signal_publisher = signal_publisher or SignalPublisher(
         core_trading_internal_base_url=app_settings.core_trading_internal_base_url,
     )
+    add_structured_request_logging(app)
     app.include_router(api_router)
 
     return app

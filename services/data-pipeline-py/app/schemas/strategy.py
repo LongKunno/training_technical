@@ -1,6 +1,6 @@
 from datetime import datetime
 
-from pydantic import BaseModel, ConfigDict
+from pydantic import BaseModel, ConfigDict, Field
 
 
 class StrategySignal(BaseModel):
@@ -31,4 +31,4 @@ class ReplaySignalsRequest(BaseModel):
 
     scenario: str = "baseline"
     strategy_id: str | None = None
-    speed_multiplier: float = 0.0
+    speed_multiplier: float = Field(default=0.0, ge=0.0, le=1000.0)

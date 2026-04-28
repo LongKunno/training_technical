@@ -19,6 +19,7 @@ ENV HOST=0.0.0.0
 ENV PORT=5173
 ENV SIMULATOR_UI_CORE_PROXY_TARGET=http://core_trading:8080
 ENV SIMULATOR_UI_DATA_PROXY_TARGET=http://data_pipeline:8000
+ENV SIMULATOR_UI_BOT_PROXY_TARGET=http://bot_runner:8001
 
 COPY . .
 
@@ -38,6 +39,7 @@ ENV HOST=0.0.0.0
 ENV PORT=80
 ENV SIMULATOR_UI_CORE_PROXY_TARGET=http://core_trading:8080
 ENV SIMULATOR_UI_DATA_PROXY_TARGET=http://data_pipeline:8000
+ENV SIMULATOR_UI_BOT_PROXY_TARGET=http://bot_runner:8001
 
 COPY package.json package-lock.json ./
 COPY --from=prod-deps /app/node_modules ./node_modules

@@ -16,9 +16,12 @@ export interface DataTableProps<Row> {
   columns: DataTableColumn<Row>[];
   rows: Row[];
   getRowId: (row: Row) => string;
+  getRowClassName?: (row: Row) => string | undefined;
   emptyTitle: string;
   emptyDescription: string;
   className?: string;
+  density?: "default" | "dense";
+  minWidth?: string;
 }
 
 const alignMap = {
@@ -34,7 +37,10 @@ export function DataTable<Row>({
   emptyDescription,
   emptyTitle,
   getRowId,
+  getRowClassName,
+  minWidth = "720px",
   rows,
+  density = "dense",
 }: DataTableProps<Row>) {
   if (!rows.length) {
     return (
@@ -48,8 +54,11 @@ export function DataTable<Row>({
   }
 
   return (
-    <div className={cx("table-scroll overflow-auto", className)}>
-      <table className="min-w-full border-separate border-spacing-0">
+    <div className={cx("table-scroll w-full max-w-full overflow-x-auto", className)}>
+      <table
+        className="w-full border-separate border-spacing-0"
+        style={{ minWidth }}
+      >
         {caption ? <caption className="sr-only">{caption}</caption> : null}
         <thead>
           <tr>
@@ -57,7 +66,8 @@ export function DataTable<Row>({
               <th
                 key={column.key}
                 className={cx(
-                  "sticky top-0 z-[1] border-b border-white/8 bg-[var(--bg-panel-strong)] px-4 py-3 text-xs font-medium uppercase tracking-[0.16em] text-slate-500 backdrop-blur",
+                  "sticky top-0 z-[1] whitespace-nowrap border-b border-white/8 bg-[var(--bg-panel-strong)] text-xs font-medium uppercase tracking-[0.16em] text-slate-500",
+                  density === "dense" ? "px-4 py-2.5" : "px-4 py-3",
                   alignMap[column.align ?? "left"],
                   column.className,
                 )}
@@ -69,12 +79,16 @@ export function DataTable<Row>({
         </thead>
         <tbody>
           {rows.map((row) => (
-            <tr key={getRowId(row)} className="group">
+            <tr
+              key={getRowId(row)}
+              className={cx("group", getRowClassName?.(row))}
+            >
               {columns.map((column) => (
                 <td
                   key={column.key}
                   className={cx(
-                    "border-b border-white/6 px-4 py-4 text-sm text-slate-200 transition group-hover:bg-white/[0.02]",
+                    "break-words border-b border-white/6 align-top text-sm text-slate-200 transition group-hover:bg-white/[0.03]",
+                    density === "dense" ? "px-4 py-3.5" : "px-4 py-4",
                     alignMap[column.align ?? "left"],
                     column.className,
                   )}

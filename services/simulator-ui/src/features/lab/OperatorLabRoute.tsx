@@ -9,6 +9,7 @@ import {
 } from "react";
 import type { UseMutationResult } from "@tanstack/react-query";
 
+import { formatOperatorErrorMessage } from "../../shared/api";
 import {
   resolveServiceAvailability,
   useCoreHealthQuery,
@@ -51,7 +52,7 @@ import {
   PulseIcon,
   Select,
   ShieldIcon,
-  StatCard,
+  SummaryStrip,
   cx,
 } from "../../shared/ui";
 
@@ -89,6 +90,7 @@ const dateTimeFormatter = new Intl.DateTimeFormat("en-US", {
 });
 
 type ActivityTone = "success" | "danger" | "info";
+type LabLaneId = "session" | "market" | "strategy" | "manual";
 
 interface ActivityItem {
   id: string;
@@ -109,6 +111,15 @@ interface WorkflowLane {
   summary: string;
   nextAction: string;
   tone: "success" | "warning" | "info";
+}
+
+interface ControlLane {
+  id: LabLaneId;
+  label: string;
+  description: string;
+  badge: string;
+  tone: "success" | "warning" | "info" | "danger" | "neutral";
+  icon: ReactNode;
 }
 
 interface StatusCalloutProps {
@@ -186,11 +197,7 @@ function describeAvailability(availability: UpstreamAvailability) {
 }
 
 function formatErrorMessage(error: unknown) {
-  if (error instanceof Error) {
-    return error.message;
-  }
-
-  return "Request failed.";
+  return formatOperatorErrorMessage(error);
 }
 
 function toOptions(values: string[]) {
@@ -317,6 +324,48 @@ function OperationBadge({
   return <Badge tone="neutral">{idleLabel}</Badge>;
 }
 
+function ControlLaneButton({
+  active,
+  lane,
+  onSelect,
+}: {
+  active: boolean;
+  lane: ControlLane;
+  onSelect: (laneId: LabLaneId) => void;
+}) {
+  const toneClassName = {
+    danger: active ? "border-rose-300/35 bg-rose-300/[0.14]" : "border-rose-300/18 bg-rose-300/[0.06]",
+    info: active ? "border-sky-300/35 bg-sky-300/[0.14]" : "border-white/8 bg-white/[0.03]",
+    neutral: active ? "border-white/18 bg-white/[0.08]" : "border-white/8 bg-white/[0.03]",
+    success: active ? "border-emerald-300/35 bg-emerald-300/[0.14]" : "border-white/8 bg-white/[0.03]",
+    warning: active ? "border-amber-300/35 bg-amber-300/[0.14]" : "border-white/8 bg-white/[0.03]",
+  }[lane.tone];
+
+  return (
+    <button
+      type="button"
+      aria-pressed={active}
+      onClick={() => onSelect(lane.id)}
+      className={cx(
+        "flex min-h-[124px] flex-col items-start gap-3 rounded-[18px] border px-4 py-4 text-left transition",
+        active ? "shadow-[inset_0_1px_0_rgba(255,255,255,0.05)]" : "hover:border-white/14 hover:bg-white/[0.05]",
+        toneClassName,
+      )}
+    >
+      <div className="flex w-full items-start justify-between gap-3">
+        <div className="flex size-10 items-center justify-center rounded-2xl border border-white/10 bg-white/[0.04] text-slate-100">
+          {lane.icon}
+        </div>
+        <Badge tone={lane.tone}>{lane.badge}</Badge>
+      </div>
+      <div>
+        <div className="text-sm font-medium text-white">{lane.label}</div>
+        <p className="mt-1 text-sm leading-6 text-slate-400">{lane.description}</p>
+      </div>
+    </button>
+  );
+}
+
 function describeStartSessionSuccess(session: SimulationSession): ActivityDescription {
   return {
     description: `Current session is ${session.id} and is now ${session.status}.`,
@@ -436,6 +485,7 @@ function getWorkflowLanes(input: {
 
 export function OperatorLabRoute() {
   const [activity, setActivity] = useState<ActivityItem[]>([]);
+  const [activeLane, setActiveLane] = useState<LabLaneId>("session");
   const [sessionIdDraft, setSessionIdDraft] = useState<string | null>(null);
   const [marketScenario, setMarketScenario] = useState("");
   const [marketTransport, setMarketTransport] = useState(DEFAULT_MARKET_TRANSPORT);
@@ -453,6 +503,8 @@ export function OperatorLabRoute() {
   const [manualQuantity, setManualQuantity] = useState(DEFAULT_MANUAL_QUANTITY);
   const [manualNotional, setManualNotional] = useState(DEFAULT_MANUAL_NOTIONAL);
   const [catalogRefreshing, setCatalogRefreshing] = useState(false);
+  const [resetArmed, setResetArmed] = useState(false);
+  const [stopArmed, setStopArmed] = useState(false);
 
   const coreHealthQuery = useCoreHealthQuery();
   const dataHealthQuery = useDataHealthQuery();
@@ -615,17 +667,31 @@ export function OperatorLabRoute() {
 
   async function handleStartSession(event: FormEvent<HTMLFormElement>) {
     event.preventDefault();
-      await startSessionMutation.mutateAsync(
+    await startSessionMutation.mutateAsync(
       resolvedSessionIdDraft.trim() ? { session_id: resolvedSessionIdDraft.trim() } : {},
     );
   }
 
   async function handleResetSession() {
+    if (!resetArmed) {
+      setResetArmed(true);
+      setStopArmed(false);
+      return;
+    }
+
     await resetSessionMutation.mutateAsync();
+    setResetArmed(false);
   }
 
   async function handleStopSession() {
+    if (!stopArmed) {
+      setStopArmed(true);
+      setResetArmed(false);
+      return;
+    }
+
     await stopSessionMutation.mutateAsync();
+    setStopArmed(false);
   }
 
   async function handlePublishMarket(event: FormEvent<HTMLFormElement>) {
@@ -695,13 +761,71 @@ export function OperatorLabRoute() {
     strategyCatalogReady,
     strategySignalsLoading: strategySignalsQuery.isLoading,
   });
+  const controlLanes: ControlLane[] = [
+    {
+      id: "session",
+      label: "Session",
+      description: currentSessionQuery.data?.status === "running"
+        ? `Current live session ${currentSessionQuery.data.id} is ready for reset or stop.`
+        : "Start or switch the paper session before relying on replay or signal actions.",
+      badge: coreUnavailable
+        ? "Core down"
+        : currentSessionQuery.data?.status === "running"
+          ? "Live"
+          : currentSessionQuery.isLoading
+            ? "Loading"
+            : "Needs start",
+      tone: coreUnavailable
+        ? "danger"
+        : currentSessionQuery.data?.status === "running"
+          ? "success"
+          : "warning",
+      icon: <PulseIcon className="size-5" />,
+    },
+    {
+      id: "market",
+      label: "Market",
+      description: marketCatalogReady
+        ? `${formatCount(marketCatalogReady)} market scenario(s) ready for publish or replay.`
+        : "Load or restore market replay catalogs before publishing quotes.",
+      badge: dataUnavailable ? "Data down" : `${formatCount(marketCatalogReady)} ready`,
+      tone: dataUnavailable ? "danger" : marketCatalogReady ? "success" : "warning",
+      icon: <DatabaseIcon className="size-5" />,
+    },
+    {
+      id: "strategy",
+      label: "Strategy",
+      description: strategySignalsQuery.isLoading
+        ? "Signal catalog is loading for the selected strategy scenario."
+        : `${formatCount(previewCount)} preview signal(s) in the current slice.`,
+      badge: dataUnavailable
+        ? "Data down"
+        : strategySignalsQuery.isLoading
+          ? "Loading"
+          : `${formatCount(previewCount)} preview`,
+      tone: dataUnavailable ? "danger" : strategySignalsQuery.isLoading ? "info" : "success",
+      icon: <ShieldIcon className="size-5" />,
+    },
+    {
+      id: "manual",
+      label: "Manual",
+      description: "Inject one explicit signal without replaying an entire scenario.",
+      badge: coreUnavailable ? "Core down" : "Ready",
+      tone: coreUnavailable ? "danger" : "info",
+      icon: <LabIcon className="size-5" />,
+    },
+  ];
+  const selectedControlLane =
+    controlLanes.find((lane) => lane.id === activeLane) ?? controlLanes[0];
 
   return (
     <>
       <PageHeader
+        variant="compact"
+        tone="accent"
         eyebrow="Operator Lab"
-        title="Mutating controls now live in a dedicated operator workspace."
-        description="Session lifecycle actions, market replay, strategy replay, and manual signal dispatch are isolated from the dashboard so operators can act without polluting historical review."
+        title="Dedicated workspace for live operator actions"
+        description="Chuyển giữa session, market, strategy và manual control lane ngay trong cùng operator route."
         actions={
           <>
             <Button
@@ -756,8 +880,7 @@ export function OperatorLabRoute() {
                 </Badge>
               </div>
               <p className="mt-4 text-sm leading-6 text-slate-400">
-                This route only uses the shared API/query layer. Current-session actions stay
-                live here while historical review remains read-only elsewhere.
+                Route này chỉ dùng shared API/query layer. Current-session action chạy live ở đây, còn historical review vẫn chỉ-đọc ở màn khác.
               </p>
             </div>
             {upstreamUnavailable ? (
@@ -784,78 +907,109 @@ export function OperatorLabRoute() {
         }
       />
 
-      <section className="grid gap-5 xl:grid-cols-4">
-        <StatCard
-          detail={
-            coreUnavailable
+      <SummaryStrip
+        items={[
+          {
+            badge: (
+              <Badge
+                tone={
+                  coreUnavailable
+                    ? "danger"
+                    : currentSessionQuery.data?.status === "running"
+                      ? "success"
+                      : "neutral"
+                }
+              >
+                {coreUnavailable ? "Core down" : currentSessionQuery.data?.status ?? "Loading"}
+              </Badge>
+            ),
+            label: "Current session",
+            meta: coreUnavailable
               ? "Core health checks are failing."
               : currentSessionQuery.data
-              ? `Last event ${formatDateTime(currentSessionQuery.data.last_event_at)}`
-              : "Waiting for the current session query."
-          }
-          icon={<PulseIcon className="size-5" />}
-          label="Current session"
-          tone={coreUnavailable ? "warning" : currentSessionQuery.data?.status === "running" ? "success" : "neutral"}
-          value={coreUnavailable ? "down" : currentSessionQuery.data?.status ?? "loading"}
-        />
-        <StatCard
-          detail={
-            dataUnavailable
+                ? `Last event ${formatDateTime(currentSessionQuery.data.last_event_at)}`
+                : "Waiting for the current session query.",
+            tone:
+              coreUnavailable
+                ? "danger"
+                : currentSessionQuery.data?.status === "running"
+                  ? "success"
+                  : "neutral",
+            value: currentSessionQuery.data?.id ?? "Not loaded",
+          },
+          {
+            badge: <Badge tone={dataUnavailable ? "danger" : "info"}>{dataUnavailable ? "Down" : "Catalog"}</Badge>,
+            label: "Market catalogs",
+            meta: dataUnavailable
               ? "Data health checks are failing."
-              : formatList(marketScenariosQuery.data ?? [], "No market scenarios yet")
-          }
-          icon={<DatabaseIcon className="size-5" />}
-          label="Market catalogs"
-          tone={dataUnavailable ? "warning" : marketCatalogReady ? "accent" : "neutral"}
-          value={dataUnavailable ? "down" : String(marketCatalogReady)}
-        />
-        <StatCard
-          detail={formatList(strategyIds, "No strategy IDs loaded")}
-          icon={<ShieldIcon className="size-5" />}
-          label="Strategy IDs"
-          tone={strategyIds.length ? "accent" : "neutral"}
-          value={String(strategyIds.length)}
-        />
-        <StatCard
-          detail={
-            activity[0]
+              : formatList(marketScenariosQuery.data ?? [], "No market scenarios yet"),
+            tone: dataUnavailable ? "danger" : marketCatalogReady ? "accent" : "neutral",
+            value: dataUnavailable ? "Down" : String(marketCatalogReady),
+          },
+          {
+            badge: <Badge tone={strategyIds.length ? "info" : "neutral"}>Strategies</Badge>,
+            label: "Strategy IDs",
+            meta: formatList(strategyIds, "No strategy IDs loaded"),
+            tone: strategyIds.length ? "accent" : "neutral",
+            value: String(strategyIds.length),
+          },
+          {
+            badge: <Badge tone={activity.length ? "warning" : "neutral"}>Activity</Badge>,
+            label: "Recent actions",
+            meta: activity[0]
               ? `${activity[0].title} at ${formatDateTime(activity[0].timestamp)}`
-              : "No operator actions recorded yet."
-          }
-          icon={<ClockIcon className="size-5" />}
-          label="Recent actions"
-          tone={activity.length ? "warning" : "neutral"}
-          value={String(activity.length)}
-        />
-      </section>
+              : "No operator actions recorded yet.",
+            tone: activity.length ? "warning" : "neutral",
+            value: String(activity.length),
+          },
+        ]}
+      />
 
       <section className="grid gap-6 xl:grid-cols-[minmax(0,1.2fr)_minmax(340px,0.8fr)]">
         <Panel
           eyebrow="Runbook"
           title="Recommended operator sequence"
-          description="The lab keeps mutating controls separated by workflow so operators can move from session setup to replay to manual override without guessing what comes next."
+          description="Lab tách control theo workflow để operator đi từ session setup sang replay rồi manual override mà không phải đoán bước kế tiếp."
           tone="soft"
         >
-          <div className="grid gap-3 lg:grid-cols-2">
-            {workflowLanes.map((lane) => (
-              <div
-                key={lane.title}
-                className="rounded-[22px] border border-white/8 bg-white/[0.04] p-4"
-              >
-                <div className="flex flex-wrap items-center gap-3">
-                  <Badge tone={lane.tone}>{lane.title}</Badge>
+          <div className="grid gap-5">
+            <div>
+              <div className="text-sm font-medium text-slate-100">Operator lanes</div>
+              <p className="mt-1 text-sm leading-6 text-slate-400">
+                Chọn một lane để tập trung thao tác, còn activity feed và reference state vẫn hiện bên cạnh để đối chiếu nhanh.
+              </p>
+            </div>
+            <div className="grid gap-3 lg:grid-cols-2 2xl:grid-cols-4" role="tablist" aria-label="Operator lanes">
+              {controlLanes.map((lane) => (
+                <ControlLaneButton
+                  key={lane.id}
+                  active={lane.id === activeLane}
+                  lane={lane}
+                  onSelect={setActiveLane}
+                />
+              ))}
+            </div>
+            <div className="grid gap-3 lg:grid-cols-2">
+              {workflowLanes.map((lane) => (
+                <div
+                  key={lane.title}
+                  className="rounded-[22px] border border-white/8 bg-white/[0.04] p-4"
+                >
+                  <div className="flex flex-wrap items-center gap-3">
+                    <Badge tone={lane.tone}>{lane.title}</Badge>
+                  </div>
+                  <div className="mt-3 text-sm font-medium text-white">{lane.summary}</div>
+                  <p className="mt-2 text-sm leading-6 text-slate-400">{lane.nextAction}</p>
                 </div>
-                <div className="mt-3 text-sm font-medium text-white">{lane.summary}</div>
-                <p className="mt-2 text-sm leading-6 text-slate-400">{lane.nextAction}</p>
-              </div>
-            ))}
+              ))}
+            </div>
           </div>
         </Panel>
 
         <Panel
           eyebrow="Mutation posture"
           title="What is safe to do next"
-          description="This side panel makes the current control posture explicit before you fire a mutation."
+          description="Panel này nói rõ trạng thái control hiện tại trước khi anh bắn mutation tiếp theo."
           tone="accent"
         >
           <div className="grid gap-3">
@@ -910,510 +1064,634 @@ export function OperatorLabRoute() {
       </section>
 
       <section className="grid gap-6 2xl:grid-cols-[minmax(0,1.3fr)_minmax(340px,0.7fr)]">
-        <div className="grid gap-6 xl:grid-cols-2">
+        <div className="grid gap-6">
           <Panel
-            eyebrow="Session lifecycle"
-            title="Current session control"
-            description="Start, reset, and stop the live paper session without leaving the operator route."
-            actions={
-              <div className="flex flex-wrap gap-2">
-                <OperationBadge
-                  error={startSessionMutation.error}
-                  idleLabel="Start ready"
-                  isError={startSessionMutation.isError}
-                  isPending={startSessionMutation.isPending}
-                  isSuccess={startSessionMutation.isSuccess}
-                  pendingLabel="Starting"
-                  successLabel="Started"
-                />
-                <OperationBadge
-                  error={resetSessionMutation.error}
-                  idleLabel="Reset ready"
-                  isError={resetSessionMutation.isError}
-                  isPending={resetSessionMutation.isPending}
-                  isSuccess={resetSessionMutation.isSuccess}
-                  pendingLabel="Resetting"
-                  successLabel="Reset"
-                />
-                <OperationBadge
-                  error={stopSessionMutation.error}
-                  idleLabel="Stop ready"
-                  isError={stopSessionMutation.isError}
-                  isPending={stopSessionMutation.isPending}
-                  isSuccess={stopSessionMutation.isSuccess}
-                  pendingLabel="Stopping"
-                  successLabel="Stopped"
-                />
-              </div>
-            }
+            eyebrow="Focused lane"
+            title={`${selectedControlLane.label} controls`}
+            description={selectedControlLane.description}
+            tone="accent"
           >
-            <form className="grid gap-4" onSubmit={(event) => void handleStartSession(event)}>
-              <div className="rounded-[22px] border border-white/8 bg-white/[0.04] p-4">
-                <div className="flex flex-wrap items-center gap-3">
-                  <Badge tone="info">Recommended order</Badge>
-                  <Badge tone="warning">Start → Reset → Stop</Badge>
+            <div className="grid gap-3 sm:grid-cols-3">
+              <div className="rounded-[18px] border border-white/8 bg-white/[0.04] p-4">
+                <div className="text-xs uppercase tracking-[0.16em] text-slate-500">Selected lane</div>
+                <div className="mt-2 flex flex-wrap items-center gap-2">
+                  <Badge tone={selectedControlLane.tone}>{selectedControlLane.badge}</Badge>
+                  <span className="text-sm text-slate-200">{selectedControlLane.label}</span>
                 </div>
-                <p className="mt-3 text-sm leading-6 text-slate-400">
-                  Start is for minting or switching the live session. Reset is for replaying the same lane from a clean slate. Stop should usually be the final lifecycle action after monitoring the run.
-                </p>
               </div>
-              <Input
-                hint="Leave blank only if the backend should mint a session ID."
-                label="Session ID"
-                onChange={(event) => {
-                  setSessionIdDraft(event.target.value);
-                }}
-                placeholder={DEFAULT_SESSION_ID}
-                value={resolvedSessionIdDraft}
-              />
-              {currentSessionQuery.isError ? (
-                <StatusCallout
-                  action={
-                    <Button
-                      onClick={() => {
-                        void currentSessionQuery.refetch();
-                      }}
-                      size="sm"
-                      tone="ghost"
-                    >
-                      Retry
-                    </Button>
-                  }
-                  description={formatErrorMessage(currentSessionQuery.error)}
-                  title="Current session query failed"
-                  tone="danger"
-                />
-              ) : currentSessionQuery.isLoading ? (
-                <StatusCallout
-                  description="Loading current session status before the next operator action."
-                  title="Loading session"
-                  tone="info"
-                />
-              ) : (
+              <div className="rounded-[18px] border border-white/8 bg-white/[0.04] p-4">
+                <div className="text-xs uppercase tracking-[0.16em] text-slate-500">Current session</div>
+                <div className="mt-2 text-sm text-slate-200">
+                  {currentSessionQuery.data?.id ?? "No current session"}
+                </div>
+                <div className="mt-1 text-xs text-slate-500">
+                  {coreUnavailable ? "Core unavailable" : currentSessionQuery.data?.status ?? "Waiting"}
+                </div>
+              </div>
+              <div className="rounded-[18px] border border-white/8 bg-white/[0.04] p-4">
+                <div className="text-xs uppercase tracking-[0.16em] text-slate-500">Upstreams</div>
+                <div className="mt-2 text-sm text-slate-200">
+                  Core {describeAvailability(coreAvailability)} · Data {describeAvailability(dataAvailability)}
+                </div>
+                <div className="mt-1 text-xs text-slate-500">
+                  {anyMutationPending ? "Mutation in flight" : "No mutation in flight"}
+                </div>
+              </div>
+            </div>
+          </Panel>
+
+          {activeLane === "session" ? (
+            <Panel
+              eyebrow="Session lifecycle"
+              title="Current session control"
+              description="Start, reset và stop live paper session ngay trong operator route."
+              actions={
+                <div className="flex flex-wrap gap-2">
+                  <OperationBadge
+                    error={startSessionMutation.error}
+                    idleLabel="Start ready"
+                    isError={startSessionMutation.isError}
+                    isPending={startSessionMutation.isPending}
+                    isSuccess={startSessionMutation.isSuccess}
+                    pendingLabel="Starting"
+                    successLabel="Started"
+                  />
+                  <OperationBadge
+                    error={resetSessionMutation.error}
+                    idleLabel="Reset ready"
+                    isError={resetSessionMutation.isError}
+                    isPending={resetSessionMutation.isPending}
+                    isSuccess={resetSessionMutation.isSuccess}
+                    pendingLabel="Resetting"
+                    successLabel="Reset"
+                  />
+                  <OperationBadge
+                    error={stopSessionMutation.error}
+                    idleLabel="Stop ready"
+                    isError={stopSessionMutation.isError}
+                    isPending={stopSessionMutation.isPending}
+                    isSuccess={stopSessionMutation.isSuccess}
+                    pendingLabel="Stopping"
+                    successLabel="Stopped"
+                  />
+                </div>
+              }
+            >
+              <form className="grid gap-4" onSubmit={(event) => void handleStartSession(event)}>
                 <div className="rounded-[22px] border border-white/8 bg-white/[0.04] p-4">
                   <div className="flex flex-wrap items-center gap-3">
-                    <Badge tone={currentSessionQuery.data?.status === "running" ? "success" : "warning"}>
-                      {currentSessionQuery.data?.status ?? "unknown"}
-                    </Badge>
-                    <span className="text-sm text-slate-300">
-                      {currentSessionQuery.data?.id ?? "No current session"}
-                    </span>
+                    <Badge tone="info">Recommended order</Badge>
+                    <Badge tone="warning">Start → Reset → Stop</Badge>
                   </div>
                   <p className="mt-3 text-sm leading-6 text-slate-400">
-                    Last event {formatDateTime(currentSessionQuery.data?.last_event_at)}.
+                    Start is for minting or switching the live session. Reset is for replaying the same lane from a clean slate. Stop should usually be the final lifecycle action after monitoring the run.
                   </p>
                 </div>
-              )}
-              <div className="grid gap-3 sm:grid-cols-3">
-                <Button
-                  tone="primary"
-                  type="submit"
-                  disabled={coreUnavailable || startSessionMutation.isPending}
-                >
-                  {startSessionMutation.isPending ? "Starting..." : "Start"}
-                </Button>
-                <Button
-                  onClick={() => {
-                    void handleResetSession();
+                <Input
+                  hint="Leave blank only if the backend should mint a session ID."
+                  label="Session ID"
+                  onChange={(event) => {
+                    setSessionIdDraft(event.target.value);
                   }}
-                  tone="secondary"
-                  disabled={coreUnavailable || resetSessionMutation.isPending}
-                >
-                  {resetSessionMutation.isPending ? "Resetting..." : "Reset"}
-                </Button>
-                <Button
-                  onClick={() => {
-                    void handleStopSession();
-                  }}
-                  tone="danger"
-                  disabled={coreUnavailable || stopSessionMutation.isPending}
-                >
-                  {stopSessionMutation.isPending ? "Stopping..." : "Stop"}
-                </Button>
-              </div>
-            </form>
-          </Panel>
-
-          <Panel
-            eyebrow="Market replay"
-            title="Quote publishing"
-            description="Publish the latest scenario tick or replay an entire market scenario through the existing transport contract."
-            actions={
-              <div className="flex flex-wrap gap-2">
-                <OperationBadge
-                  error={publishMarketMutation.error}
-                  idleLabel="Publish ready"
-                  isError={publishMarketMutation.isError}
-                  isPending={publishMarketMutation.isPending}
-                  isSuccess={publishMarketMutation.isSuccess}
-                  pendingLabel="Publishing"
-                  successLabel="Published"
+                  placeholder={DEFAULT_SESSION_ID}
+                  value={resolvedSessionIdDraft}
                 />
-                <OperationBadge
-                  error={replayMarketMutation.error}
-                  idleLabel="Replay ready"
-                  isError={replayMarketMutation.isError}
-                  isPending={replayMarketMutation.isPending}
-                  isSuccess={replayMarketMutation.isSuccess}
-                  pendingLabel="Replaying"
-                  successLabel="Replayed"
-                />
-              </div>
-            }
-          >
-            <form className="grid gap-4" onSubmit={(event) => void handlePublishMarket(event)}>
-              <Select
-                hint="Pulled from /data/api/data/market/quotes/replay/scenarios."
-                label="Scenario"
-                onChange={(event) => setMarketScenario(event.target.value)}
-                options={toOptions(marketScenariosQuery.data ?? [])}
-                placeholder={
-                  marketScenariosQuery.isLoading ? "Loading scenarios..." : "No scenarios available"
-                }
-                value={resolvedMarketScenario}
-              />
-              <Select
-                label="Transport"
-                onChange={(event) => setMarketTransport(event.target.value)}
-                options={transportOptions}
-                value={marketTransport}
-              />
-              <Input
-                hint="Used for full scenario replay only."
-                label="Speed multiplier"
-                min="0"
-                onChange={(event) => setMarketSpeed(event.target.value)}
-                step="0.1"
-                type="number"
-                value={marketSpeed}
-              />
-              {marketScenariosQuery.isError ? (
-                <StatusCallout
-                  action={
+                {currentSessionQuery.isError ? (
+                  <StatusCallout
+                    action={
+                      <Button
+                        onClick={() => {
+                          void currentSessionQuery.refetch();
+                        }}
+                        size="sm"
+                        tone="ghost"
+                      >
+                        Retry
+                      </Button>
+                    }
+                    description={formatErrorMessage(currentSessionQuery.error)}
+                    title="Current session query failed"
+                    tone="danger"
+                  />
+                ) : currentSessionQuery.isLoading ? (
+                  <StatusCallout
+                    description="Loading current session status before the next operator action."
+                    title="Loading session"
+                    tone="info"
+                  />
+                ) : (
+                  <div className="rounded-[22px] border border-white/8 bg-white/[0.04] p-4">
+                    <div className="flex flex-wrap items-center gap-3">
+                      <Badge tone={currentSessionQuery.data?.status === "running" ? "success" : "warning"}>
+                        {currentSessionQuery.data?.status ?? "unknown"}
+                      </Badge>
+                      <span className="text-sm text-slate-300">
+                        {currentSessionQuery.data?.id ?? "No current session"}
+                      </span>
+                    </div>
+                    <p className="mt-3 text-sm leading-6 text-slate-400">
+                      Last event {formatDateTime(currentSessionQuery.data?.last_event_at)}.
+                    </p>
+                  </div>
+                )}
+                <div className="grid gap-3 sm:grid-cols-3">
+                  <Button
+                    tone="primary"
+                    type="submit"
+                    disabled={coreUnavailable || startSessionMutation.isPending}
+                  >
+                    {startSessionMutation.isPending ? "Starting..." : "Start"}
+                  </Button>
+                  <Button
+                    onClick={() => {
+                      void handleResetSession();
+                    }}
+                    tone={resetArmed ? "danger" : "secondary"}
+                    disabled={coreUnavailable || resetSessionMutation.isPending}
+                  >
+                    {resetSessionMutation.isPending
+                      ? "Resetting..."
+                      : resetArmed
+                        ? "Confirm reset"
+                        : "Reset"}
+                  </Button>
+                  <Button
+                    onClick={() => {
+                      void handleStopSession();
+                    }}
+                    tone={stopArmed ? "danger" : "secondary"}
+                    disabled={coreUnavailable || stopSessionMutation.isPending}
+                  >
+                    {stopSessionMutation.isPending
+                      ? "Stopping..."
+                      : stopArmed
+                        ? "Confirm stop"
+                        : "Stop"}
+                  </Button>
+                  {resetArmed || stopArmed ? (
                     <Button
                       onClick={() => {
-                        void marketScenariosQuery.refetch();
+                        setResetArmed(false);
+                        setStopArmed(false);
                       }}
-                      size="sm"
                       tone="ghost"
+                      disabled={resetSessionMutation.isPending || stopSessionMutation.isPending}
                     >
-                      Retry
+                      Cancel
                     </Button>
-                  }
-                  description={formatErrorMessage(marketScenariosQuery.error)}
-                  title="Market scenarios could not be loaded"
-                  tone="danger"
-                />
-              ) : null}
-              <div className="grid gap-3 sm:grid-cols-2">
-                <Button
-                  tone="primary"
-                  type="submit"
-                  disabled={
-                    upstreamUnavailable ||
-                    !resolvedMarketScenario ||
-                    publishMarketMutation.isPending
-                  }
-                >
-                  {publishMarketMutation.isPending ? "Publishing..." : "Publish latest"}
-                </Button>
-                <Button
-                  onClick={() => {
-                    void handleReplayMarket();
-                  }}
-                  tone="secondary"
-                  disabled={
-                    upstreamUnavailable ||
-                    !resolvedMarketScenario ||
-                    replayMarketMutation.isPending
-                  }
-                >
-                  {replayMarketMutation.isPending ? "Replaying..." : "Replay scenario"}
-                </Button>
-              </div>
-            </form>
-          </Panel>
+                  ) : null}
+                </div>
+                {resetArmed || stopArmed ? (
+                  <div className="rounded-[18px] border border-amber-300/20 bg-amber-300/[0.08] px-4 py-3 text-sm leading-6 text-amber-100">
+                    {resetArmed
+                      ? "Confirm reset to clear the current paper session state and replay this lane from a clean slate."
+                      : "Confirm stop to close the active paper session. Use this after the run has finished or when you need to halt the current lane."}
+                  </div>
+                ) : null}
+              </form>
+            </Panel>
+          ) : null}
 
-          <Panel
-            eyebrow="Strategy replay"
-            title="Scenario publishing"
-            description="Use live scenario catalogs to preview available signals, then publish or replay the selected slice."
-            actions={
-              <div className="flex flex-wrap gap-2">
-                <OperationBadge
-                  error={publishSignalsMutation.error}
-                  idleLabel="Publish ready"
-                  isError={publishSignalsMutation.isError}
-                  isPending={publishSignalsMutation.isPending}
-                  isSuccess={publishSignalsMutation.isSuccess}
-                  pendingLabel="Publishing"
-                  successLabel="Published"
-                />
-                <OperationBadge
-                  error={replaySignalsMutation.error}
-                  idleLabel="Replay ready"
-                  isError={replaySignalsMutation.isError}
-                  isPending={replaySignalsMutation.isPending}
-                  isSuccess={replaySignalsMutation.isSuccess}
-                  pendingLabel="Replaying"
-                  successLabel="Replayed"
-                />
-              </div>
-            }
-          >
-            <form className="grid gap-4" onSubmit={(event) => void handlePublishSignals(event)}>
-              <Select
-                hint="Pulled from /data/api/data/strategy/signals/scenarios."
-                label="Scenario"
-                onChange={(event) => setStrategyScenario(event.target.value)}
-                options={toOptions(strategyScenariosQuery.data ?? [])}
-                placeholder={
-                  strategyScenariosQuery.isLoading ? "Loading scenarios..." : "No scenarios available"
-                }
-                value={resolvedStrategyScenario}
-              />
-              <Select
-                hint="Derived from the selected scenario's signal catalog."
-                label="Strategy ID"
-                onChange={(event) => setStrategyId(event.target.value)}
-                options={toOptions(strategyIds)}
-                placeholder="All strategies"
-                value={resolvedStrategyId}
-              />
-              <div className="grid gap-4 sm:grid-cols-2">
-                <Input
-                  label="Limit"
-                  min="0"
-                  onChange={(event) => setStrategyLimit(event.target.value)}
-                  type="number"
-                  value={strategyLimit}
-                />
-                <Input
-                  label="Offset"
-                  min="0"
-                  onChange={(event) => setStrategyOffset(event.target.value)}
-                  type="number"
-                  value={strategyOffset}
-                />
-              </div>
-              <Input
-                hint="Defaults to 0x to match the existing operator flow."
-                label="Replay speed"
-                min="0"
-                onChange={(event) => setStrategyReplaySpeed(event.target.value)}
-                step="0.1"
-                type="number"
-                value={strategyReplaySpeed}
-              />
-              {strategyScenariosQuery.isError ? (
-                <StatusCallout
-                  action={
-                    <Button
-                      onClick={() => {
-                        void strategyScenariosQuery.refetch();
-                      }}
-                      size="sm"
-                      tone="ghost"
-                    >
-                      Retry
-                    </Button>
-                  }
-                  description={formatErrorMessage(strategyScenariosQuery.error)}
-                  title="Strategy scenarios could not be loaded"
-                  tone="danger"
-                />
-              ) : null}
-              {strategySignalsQuery.isError ? (
-                <StatusCallout
-                  action={
-                    <Button
-                      onClick={() => {
-                        void strategySignalsQuery.refetch();
-                      }}
-                      size="sm"
-                      tone="ghost"
-                    >
-                      Retry
-                    </Button>
-                  }
-                  description={formatErrorMessage(strategySignalsQuery.error)}
-                  title="Signal catalog preview failed"
-                  tone="danger"
-                />
-              ) : strategySignalsQuery.isLoading ? (
-                <StatusCallout
-                  description="Fetching the scenario signal catalog so strategy IDs and previews stay in sync."
-                  title="Loading signal catalog"
-                  tone="info"
-                />
-              ) : null}
-              <div className="grid gap-3 sm:grid-cols-2">
-                <Button
-                  tone="primary"
-                  type="submit"
-                  disabled={
-                    upstreamUnavailable ||
-                    !resolvedStrategyScenario ||
-                    publishSignalsMutation.isPending
-                  }
-                >
-                  {publishSignalsMutation.isPending ? "Publishing..." : "Publish slice"}
-                </Button>
-                <Button
-                  onClick={() => {
-                    void handleReplaySignals();
-                  }}
-                  tone="secondary"
-                  disabled={
-                    upstreamUnavailable ||
-                    !resolvedStrategyScenario ||
-                    replaySignalsMutation.isPending
-                  }
-                >
-                  {replaySignalsMutation.isPending ? "Replaying..." : "Replay all"}
-                </Button>
-              </div>
-            </form>
-          </Panel>
-
-          <Panel
-            eyebrow="Manual signal"
-            title="Signal composer"
-            description="Dispatch a single signal through `/core/internal/signals` without bypassing the typed mutation layer."
-            actions={
-              <OperationBadge
-                error={manualSignalMutation.error}
-                idleLabel="Ready"
-                isError={manualSignalMutation.isError}
-                isPending={manualSignalMutation.isPending}
-                isSuccess={manualSignalMutation.isSuccess}
-                pendingLabel="Sending"
-                successLabel="Sent"
-              />
-            }
-          >
-            <form className="grid gap-4" onSubmit={(event) => void handleSendManualSignal(event)}>
-              <Input
-                label="Strategy ID"
-                onChange={(event) => setManualStrategyId(event.target.value)}
-                required
-                value={manualStrategyId}
-              />
-              <Input
-                label="Signal ID"
-                onChange={(event) => setManualSignalId(event.target.value)}
-                required
-                value={manualSignalId}
-              />
-              <Input
-                label="Symbol"
-                onChange={(event) => setManualSymbol(event.target.value.toUpperCase())}
-                required
-                value={manualSymbol}
-              />
-              <div className="grid gap-4 sm:grid-cols-2">
-                <Select
-                  label="Side"
-                  onChange={(event) => setManualSide(event.target.value)}
-                  options={sideOptions}
-                  value={manualSide}
-                />
-                <Input
-                  label="Price hint"
-                  min="0"
-                  onChange={(event) => setManualPrice(event.target.value)}
-                  step="0.0001"
-                  type="number"
-                  value={manualPrice}
-                />
-              </div>
-              <div className="grid gap-4 sm:grid-cols-2">
-                <Input
-                  label="Quantity"
-                  min="0"
-                  onChange={(event) => setManualQuantity(event.target.value)}
-                  step="0.0001"
-                  type="number"
-                  value={manualQuantity}
-                />
-                <Input
-                  hint="Set 0 when quantity drives the order."
-                  label="Notional"
-                  min="0"
-                  onChange={(event) => setManualNotional(event.target.value)}
-                  step="0.01"
-                  type="number"
-                  value={manualNotional}
-                />
-              </div>
-              <Button
-                tone="primary"
-                type="submit"
-                disabled={
-                  coreUnavailable ||
-                  manualSignalMutation.isPending ||
-                  !manualStrategyId.trim() ||
-                  !manualSignalId.trim() ||
-                  !manualSymbol.trim()
+          {activeLane === "market" ? (
+            <div className="grid gap-6 xl:grid-cols-[minmax(0,1fr)_320px]">
+              <Panel
+                eyebrow="Market replay"
+                title="Quote publishing"
+                description="Publish tick mới nhất hoặc replay cả market scenario qua transport contract hiện có."
+                actions={
+                  <div className="flex flex-wrap gap-2">
+                    <OperationBadge
+                      error={publishMarketMutation.error}
+                      idleLabel="Publish ready"
+                      isError={publishMarketMutation.isError}
+                      isPending={publishMarketMutation.isPending}
+                      isSuccess={publishMarketMutation.isSuccess}
+                      pendingLabel="Publishing"
+                      successLabel="Published"
+                    />
+                    <OperationBadge
+                      error={replayMarketMutation.error}
+                      idleLabel="Replay ready"
+                      isError={replayMarketMutation.isError}
+                      isPending={replayMarketMutation.isPending}
+                      isSuccess={replayMarketMutation.isSuccess}
+                      pendingLabel="Replaying"
+                      successLabel="Replayed"
+                    />
+                  </div>
                 }
               >
-                {manualSignalMutation.isPending ? "Sending..." : "Send signal"}
-              </Button>
-            </form>
-          </Panel>
+                <form className="grid gap-4" onSubmit={(event) => void handlePublishMarket(event)}>
+                  <Select
+                    hint="Pulled from /data/api/data/market/quotes/replay/scenarios."
+                    label="Scenario"
+                    onChange={(event) => setMarketScenario(event.target.value)}
+                    options={toOptions(marketScenariosQuery.data ?? [])}
+                    placeholder={
+                      marketScenariosQuery.isLoading ? "Loading scenarios..." : "No scenarios available"
+                    }
+                    value={resolvedMarketScenario}
+                  />
+                  <Select
+                    label="Transport"
+                    onChange={(event) => setMarketTransport(event.target.value)}
+                    options={transportOptions}
+                    value={marketTransport}
+                  />
+                  <Input
+                    hint="Used for full scenario replay only."
+                    label="Speed multiplier"
+                    min="0"
+                    onChange={(event) => setMarketSpeed(event.target.value)}
+                    step="0.1"
+                    type="number"
+                    value={marketSpeed}
+                  />
+                  {marketScenariosQuery.isError ? (
+                    <StatusCallout
+                      action={
+                        <Button
+                          onClick={() => {
+                            void marketScenariosQuery.refetch();
+                          }}
+                          size="sm"
+                          tone="ghost"
+                        >
+                          Retry
+                        </Button>
+                      }
+                      description={formatErrorMessage(marketScenariosQuery.error)}
+                      title="Market scenarios could not be loaded"
+                      tone="danger"
+                    />
+                  ) : null}
+                  <div className="grid gap-3 sm:grid-cols-2">
+                    <Button
+                      tone="primary"
+                      type="submit"
+                      disabled={
+                        upstreamUnavailable ||
+                        !resolvedMarketScenario ||
+                        publishMarketMutation.isPending
+                      }
+                    >
+                      {publishMarketMutation.isPending ? "Publishing..." : "Publish latest"}
+                    </Button>
+                    <Button
+                      onClick={() => {
+                        void handleReplayMarket();
+                      }}
+                      tone="secondary"
+                      disabled={
+                        upstreamUnavailable ||
+                        !resolvedMarketScenario ||
+                        replayMarketMutation.isPending
+                      }
+                    >
+                      {replayMarketMutation.isPending ? "Replaying..." : "Replay scenario"}
+                    </Button>
+                  </div>
+                </form>
+              </Panel>
 
-          <Panel
-            eyebrow="Signal preview"
-            title="Scenario slice preview"
-            description="Preview the selected scenario and strategy slice before mutating the live session."
-            className="xl:col-span-2"
-          >
-            <DataTable<StrategySignal>
-              caption="Signal preview"
-              columns={[
-                {
-                  cell: (signal) => formatDateTime(signal.timestamp),
-                  header: "Timestamp",
-                  key: "timestamp",
-                },
-                {
-                  cell: (signal) => signal.strategy_id,
-                  header: "Strategy",
-                  key: "strategy",
-                },
-                {
-                  cell: (signal) => signal.signal_id,
-                  header: "Signal",
-                  key: "signal",
-                },
-                {
-                  cell: (signal) => signal.symbol,
-                  header: "Symbol",
-                  key: "symbol",
-                },
-                {
-                  cell: (signal) => (
-                    <Badge tone={signal.side === "buy" ? "success" : "danger"}>
-                      {signal.side}
-                    </Badge>
-                  ),
-                  header: "Side",
-                  key: "side",
-                },
-              ]}
-              emptyDescription="Choose a strategy scenario or adjust limit and offset until the slice contains rows."
-              emptyTitle="No signals match this preview slice"
-              getRowId={(signal) => `${signal.strategy_id}:${signal.signal_id}`}
-              rows={previewSignals}
-            />
-          </Panel>
+              <Panel
+                eyebrow="Market context"
+                title="Selected replay posture"
+                description="Giữ scenario và transport đã chọn trong tầm nhìn khi bắn quote mutation."
+                tone="soft"
+              >
+                <div className="grid gap-3">
+                  <div className="rounded-[18px] border border-white/8 bg-white/[0.04] p-4">
+                    <div className="text-xs uppercase tracking-[0.16em] text-slate-500">Scenario</div>
+                    <div className="mt-2 text-sm text-slate-200">{resolvedMarketScenario || "Not selected"}</div>
+                  </div>
+                  <div className="rounded-[18px] border border-white/8 bg-white/[0.04] p-4">
+                    <div className="text-xs uppercase tracking-[0.16em] text-slate-500">Transport</div>
+                    <div className="mt-2 text-sm text-slate-200">{marketTransport}</div>
+                  </div>
+                  <div className="rounded-[18px] border border-white/8 bg-white/[0.04] p-4">
+                    <div className="text-xs uppercase tracking-[0.16em] text-slate-500">Replay speed</div>
+                    <div className="mt-2 text-sm text-slate-200">{marketSpeed}x</div>
+                  </div>
+                </div>
+              </Panel>
+            </div>
+          ) : null}
+
+          {activeLane === "strategy" ? (
+            <>
+              <Panel
+                eyebrow="Strategy replay"
+                title="Scenario publishing"
+                description="Dùng live scenario catalog để xem signal khả dụng, rồi publish hoặc replay slice đã chọn."
+                actions={
+                  <div className="flex flex-wrap gap-2">
+                    <OperationBadge
+                      error={publishSignalsMutation.error}
+                      idleLabel="Publish ready"
+                      isError={publishSignalsMutation.isError}
+                      isPending={publishSignalsMutation.isPending}
+                      isSuccess={publishSignalsMutation.isSuccess}
+                      pendingLabel="Publishing"
+                      successLabel="Published"
+                    />
+                    <OperationBadge
+                      error={replaySignalsMutation.error}
+                      idleLabel="Replay ready"
+                      isError={replaySignalsMutation.isError}
+                      isPending={replaySignalsMutation.isPending}
+                      isSuccess={replaySignalsMutation.isSuccess}
+                      pendingLabel="Replaying"
+                      successLabel="Replayed"
+                    />
+                  </div>
+                }
+              >
+                <form className="grid gap-4" onSubmit={(event) => void handlePublishSignals(event)}>
+                  <Select
+                    hint="Pulled from /data/api/data/strategy/signals/scenarios."
+                    label="Scenario"
+                    onChange={(event) => setStrategyScenario(event.target.value)}
+                    options={toOptions(strategyScenariosQuery.data ?? [])}
+                    placeholder={
+                      strategyScenariosQuery.isLoading ? "Loading scenarios..." : "No scenarios available"
+                    }
+                    value={resolvedStrategyScenario}
+                  />
+                  <Select
+                    hint="Derived from the selected scenario's signal catalog."
+                    label="Strategy ID"
+                    onChange={(event) => setStrategyId(event.target.value)}
+                    options={toOptions(strategyIds)}
+                    placeholder="All strategies"
+                    value={resolvedStrategyId}
+                  />
+                  <div className="grid gap-4 sm:grid-cols-2">
+                    <Input
+                      label="Limit"
+                      min="0"
+                      onChange={(event) => setStrategyLimit(event.target.value)}
+                      type="number"
+                      value={strategyLimit}
+                    />
+                    <Input
+                      label="Offset"
+                      min="0"
+                      onChange={(event) => setStrategyOffset(event.target.value)}
+                      type="number"
+                      value={strategyOffset}
+                    />
+                  </div>
+                  <Input
+                    hint="Defaults to 0x to match the existing operator flow."
+                    label="Replay speed"
+                    min="0"
+                    onChange={(event) => setStrategyReplaySpeed(event.target.value)}
+                    step="0.1"
+                    type="number"
+                    value={strategyReplaySpeed}
+                  />
+                  {strategyScenariosQuery.isError ? (
+                    <StatusCallout
+                      action={
+                        <Button
+                          onClick={() => {
+                            void strategyScenariosQuery.refetch();
+                          }}
+                          size="sm"
+                          tone="ghost"
+                        >
+                          Retry
+                        </Button>
+                      }
+                      description={formatErrorMessage(strategyScenariosQuery.error)}
+                      title="Strategy scenarios could not be loaded"
+                      tone="danger"
+                    />
+                  ) : null}
+                  {strategySignalsQuery.isError ? (
+                    <StatusCallout
+                      action={
+                        <Button
+                          onClick={() => {
+                            void strategySignalsQuery.refetch();
+                          }}
+                          size="sm"
+                          tone="ghost"
+                        >
+                          Retry
+                        </Button>
+                      }
+                      description={formatErrorMessage(strategySignalsQuery.error)}
+                      title="Signal catalog preview failed"
+                      tone="danger"
+                    />
+                  ) : strategySignalsQuery.isLoading ? (
+                    <StatusCallout
+                      description="Fetching the scenario signal catalog so strategy IDs and previews stay in sync."
+                      title="Loading signal catalog"
+                      tone="info"
+                    />
+                  ) : null}
+                  <div className="grid gap-3 sm:grid-cols-2">
+                    <Button
+                      tone="primary"
+                      type="submit"
+                      disabled={
+                        upstreamUnavailable ||
+                        !resolvedStrategyScenario ||
+                        publishSignalsMutation.isPending
+                      }
+                    >
+                      {publishSignalsMutation.isPending ? "Publishing..." : "Publish slice"}
+                    </Button>
+                    <Button
+                      onClick={() => {
+                        void handleReplaySignals();
+                      }}
+                      tone="secondary"
+                      disabled={
+                        upstreamUnavailable ||
+                        !resolvedStrategyScenario ||
+                        replaySignalsMutation.isPending
+                      }
+                    >
+                      {replaySignalsMutation.isPending ? "Replaying..." : "Replay all"}
+                    </Button>
+                  </div>
+                </form>
+              </Panel>
+
+              <Panel
+                eyebrow="Signal preview"
+                title="Scenario slice preview"
+                description="Xem trước scenario và strategy slice đã chọn trước khi mutate live session."
+              >
+                <DataTable<StrategySignal>
+                  caption="Signal preview"
+                  columns={[
+                    {
+                      cell: (signal) => formatDateTime(signal.timestamp),
+                      header: "Timestamp",
+                      key: "timestamp",
+                    },
+                    {
+                      cell: (signal) => signal.strategy_id,
+                      header: "Strategy",
+                      key: "strategy",
+                    },
+                    {
+                      cell: (signal) => signal.signal_id,
+                      header: "Signal",
+                      key: "signal",
+                    },
+                    {
+                      cell: (signal) => signal.symbol,
+                      header: "Symbol",
+                      key: "symbol",
+                    },
+                    {
+                      cell: (signal) => (
+                        <Badge tone={signal.side === "buy" ? "success" : "danger"}>
+                          {signal.side}
+                        </Badge>
+                      ),
+                      header: "Side",
+                      key: "side",
+                    },
+                  ]}
+                  emptyDescription="Hãy chọn strategy scenario hoặc chỉnh limit và offset cho tới khi slice có dữ liệu."
+                  emptyTitle="No signals match this preview slice"
+                  getRowId={(signal) => `${signal.strategy_id}:${signal.signal_id}`}
+                  rows={previewSignals}
+                />
+              </Panel>
+            </>
+          ) : null}
+
+          {activeLane === "manual" ? (
+            <div className="grid gap-6 xl:grid-cols-[minmax(0,1fr)_320px]">
+              <Panel
+                eyebrow="Manual signal"
+                title="Signal composer"
+                description="Gửi một signal đơn qua `/core/internal/signals` mà không bỏ qua typed mutation layer."
+                actions={
+                  <OperationBadge
+                    error={manualSignalMutation.error}
+                    idleLabel="Ready"
+                    isError={manualSignalMutation.isError}
+                    isPending={manualSignalMutation.isPending}
+                    isSuccess={manualSignalMutation.isSuccess}
+                    pendingLabel="Sending"
+                    successLabel="Sent"
+                  />
+                }
+              >
+                <form className="grid gap-4" onSubmit={(event) => void handleSendManualSignal(event)}>
+                  <Input
+                    label="Strategy ID"
+                    onChange={(event) => setManualStrategyId(event.target.value)}
+                    required
+                    value={manualStrategyId}
+                  />
+                  <Input
+                    label="Signal ID"
+                    onChange={(event) => setManualSignalId(event.target.value)}
+                    required
+                    value={manualSignalId}
+                  />
+                  <Input
+                    label="Symbol"
+                    onChange={(event) => setManualSymbol(event.target.value.toUpperCase())}
+                    required
+                    value={manualSymbol}
+                  />
+                  <div className="grid gap-4 sm:grid-cols-2">
+                    <Select
+                      label="Side"
+                      onChange={(event) => setManualSide(event.target.value)}
+                      options={sideOptions}
+                      value={manualSide}
+                    />
+                    <Input
+                      label="Price hint"
+                      min="0"
+                      onChange={(event) => setManualPrice(event.target.value)}
+                      step="0.0001"
+                      type="number"
+                      value={manualPrice}
+                    />
+                  </div>
+                  <div className="grid gap-4 sm:grid-cols-2">
+                    <Input
+                      label="Quantity"
+                      min="0"
+                      onChange={(event) => setManualQuantity(event.target.value)}
+                      step="0.0001"
+                      type="number"
+                      value={manualQuantity}
+                    />
+                    <Input
+                      hint="Set 0 when quantity drives the order."
+                      label="Notional"
+                      min="0"
+                      onChange={(event) => setManualNotional(event.target.value)}
+                      step="0.01"
+                      type="number"
+                      value={manualNotional}
+                    />
+                  </div>
+                  <Button
+                    tone="primary"
+                    type="submit"
+                    disabled={
+                      coreUnavailable ||
+                      manualSignalMutation.isPending ||
+                      !manualStrategyId.trim() ||
+                      !manualSignalId.trim() ||
+                      !manualSymbol.trim()
+                    }
+                  >
+                    {manualSignalMutation.isPending ? "Sending..." : "Send signal"}
+                  </Button>
+                </form>
+              </Panel>
+
+              <Panel
+                eyebrow="Manual draft"
+                title="Current payload"
+                description="Giữ payload signal sắp gửi trong tầm nhìn trước khi dispatch một override một lần."
+                tone="soft"
+              >
+                <div className="grid gap-3">
+                  <div className="rounded-[18px] border border-white/8 bg-white/[0.04] p-4">
+                    <div className="text-xs uppercase tracking-[0.16em] text-slate-500">Strategy</div>
+                    <div className="mt-2 text-sm text-slate-200">{manualStrategyId || "Not set"}</div>
+                  </div>
+                  <div className="rounded-[18px] border border-white/8 bg-white/[0.04] p-4">
+                    <div className="text-xs uppercase tracking-[0.16em] text-slate-500">Signal</div>
+                    <div className="mt-2 text-sm text-slate-200">{manualSignalId || "Not set"}</div>
+                  </div>
+                  <div className="rounded-[18px] border border-white/8 bg-white/[0.04] p-4">
+                    <div className="text-xs uppercase tracking-[0.16em] text-slate-500">Order intent</div>
+                    <div className="mt-2 text-sm text-slate-200">
+                      {manualSide.toUpperCase()} {manualSymbol || "SYMBOL"}
+                    </div>
+                    <div className="mt-1 text-xs text-slate-500">
+                      Qty {manualQuantity || "0"} · Notional {manualNotional || "0"} · Price hint {manualPrice || "0"}
+                    </div>
+                  </div>
+                </div>
+              </Panel>
+            </div>
+          ) : null}
         </div>
 
         <div className="grid gap-6">
           <Panel
             eyebrow="Recent activity"
             title="Operator activity feed"
-            description="Every mutation success and failure is recorded locally so operators have immediate feedback without checking the browser console."
+            description="Mọi mutation success và failure đều được ghi cục bộ để operator có phản hồi ngay mà không cần mở console."
           >
             {activity.length ? (
               <div className="feed-scroll grid max-h-[560px] gap-3 overflow-auto pr-2">
@@ -1436,7 +1714,7 @@ export function OperatorLabRoute() {
               <EmptyState
                 eyebrow="Activity"
                 title="No operator actions recorded yet"
-                description="Run a session action, publish a scenario, or send a manual signal to populate the local activity feed."
+                description="Hãy chạy session action, publish scenario hoặc gửi manual signal để activity feed bắt đầu có dữ liệu."
                 icon={<ClockIcon className="size-5" />}
               />
             )}
@@ -1445,7 +1723,7 @@ export function OperatorLabRoute() {
           <Panel
             eyebrow="Reference state"
             title="Data and session health"
-            description="The operator route depends on shared queries for current-session state and scenario catalogs."
+            description="Operator route phụ thuộc vào shared query của current session và các scenario catalog."
           >
             <div className="grid gap-3">
               <StatusCallout

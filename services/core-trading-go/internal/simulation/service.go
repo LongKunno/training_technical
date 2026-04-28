@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"math"
 	"sort"
 	"strings"
 	"sync"
@@ -491,6 +492,7 @@ func (s *Service) GetExperimentSummary(experimentID string) ([]ExperimentSummary
 		scenarioID string
 	}
 	rowsByKey := make(map[key]*ExperimentSummaryRow)
+	pnlStatsByKey := make(map[key]*experimentSummaryStats)
 
 	for _, slot := range experiment.Slots {
 		currentKey := key{botID: slot.BotID, botVersion: slot.BotVersion, scenarioID: slot.ScenarioID}
@@ -553,6 +555,15 @@ func (s *Service) GetExperimentSummary(experimentID string) ([]ExperimentSummary
 		row := rowsByKey[currentKey]
 		row.AvgTotalPnL += detail.MetricsSnapshot.TotalPnL
 		row.AvgMaxDrawdown += detail.MetricsSnapshot.MaxDrawdown
+		row.AvgFillRatio += detail.MetricsSnapshot.FillRatio
+		row.AvgSlippageBps += detail.MetricsSnapshot.AverageSlippageBps
+		row.AvgCancelRate += detail.MetricsSnapshot.CancelRate
+		stats := pnlStatsByKey[currentKey]
+		if stats == nil {
+			stats = &experimentSummaryStats{}
+			pnlStatsByKey[currentKey] = stats
+		}
+		stats.Add(detail.MetricsSnapshot.TotalPnL)
 		if detail.MetricsSnapshot.TotalPnL > row.BestTotalPnL {
 			row.BestTotalPnL = detail.MetricsSnapshot.TotalPnL
 		}
@@ -566,9 +577,20 @@ func (s *Service) GetExperimentSummary(experimentID string) ([]ExperimentSummary
 		if row.CompletedRuns > 0 {
 			row.AvgTotalPnL /= float64(row.CompletedRuns)
 			row.AvgMaxDrawdown /= float64(row.CompletedRuns)
+			row.AvgFillRatio /= float64(row.CompletedRuns)
+			row.AvgSlippageBps /= float64(row.CompletedRuns)
+			row.AvgCancelRate /= float64(row.CompletedRuns)
+			if stats := pnlStatsByKey[key{botID: row.BotID, botVersion: row.BotVersion, scenarioID: row.ScenarioID}]; stats != nil {
+				row.StdDevTotalPnL = stats.SampleStdDev()
+				row.CI95TotalPnL = stats.CI95()
+			}
 		} else {
 			row.BestTotalPnL = 0
 			row.WorstTotalPnL = 0
+		}
+		terminalRuns := row.CompletedRuns + row.FailedRuns + row.StoppedRuns
+		if terminalRuns > 0 {
+			row.FailureRate = float64(row.FailedRuns) / float64(terminalRuns)
 		}
 		rows = append(rows, *row)
 	}
@@ -584,6 +606,33 @@ func (s *Service) GetExperimentSummary(experimentID string) ([]ExperimentSummary
 	})
 
 	return rows, nil
+}
+
+type experimentSummaryStats struct {
+	count int
+	mean  float64
+	m2    float64
+}
+
+func (s *experimentSummaryStats) Add(value float64) {
+	s.count++
+	delta := value - s.mean
+	s.mean += delta / float64(s.count)
+	s.m2 += delta * (value - s.mean)
+}
+
+func (s experimentSummaryStats) SampleStdDev() float64 {
+	if s.count < 2 {
+		return 0
+	}
+	return math.Sqrt(s.m2 / float64(s.count-1))
+}
+
+func (s experimentSummaryStats) CI95() float64 {
+	if s.count < 2 {
+		return 0
+	}
+	return 1.96 * s.SampleStdDev() / math.Sqrt(float64(s.count))
 }
 
 func (s *Service) stopSessionIfMatch(sessionID string) {
@@ -1196,20 +1245,39 @@ func toPaperExecutionProfile(input ExecutionProfile, marketProfile MarketMicrost
 			SignalLatencyTicks:     marketProfile.SignalLatencyTicks,
 			SpreadBps:              marketProfile.SpreadBps,
 			MaxFillNotionalPerTick: marketProfile.MaxFillNotionalPerTick,
+			LiquidityCurve:         toPaperLiquidityCurve(marketProfile.LiquidityCurve),
+			QueuePriority:          marketProfile.QueuePriority,
+			MarketImpactBpsPer10k:  marketProfile.MarketImpactBpsPer10k,
+			CancelAfterTicks:       marketProfile.CancelAfterTicks,
 		},
 	}
 }
 
+func toPaperLiquidityCurve(input []LiquidityCurvePoint) []papertrading.LiquidityCurvePoint {
+	output := make([]papertrading.LiquidityCurvePoint, 0, len(input))
+	for _, point := range input {
+		output = append(output, papertrading.LiquidityCurvePoint{
+			MaxNotional: point.MaxNotional,
+			FillRatio:   point.FillRatio,
+		})
+	}
+	return output
+}
+
 func metricsFromReport(report papertrading.SessionReport) RunMetricsSummary {
 	return RunMetricsSummary{
-		FilledOrders:    report.FilledOrders,
-		RejectedSignals: report.RejectedSignals,
-		FeesPaid:        report.FeesPaid,
-		SlippageCost:    report.SlippageCost,
-		RealizedPnL:     report.RealizedPnL,
-		UnrealizedPnL:   report.UnrealizedPnL,
-		TotalPnL:        report.TotalPnL,
-		MaxDrawdown:     report.MaxDrawdown,
+		FilledOrders:       report.FilledOrders,
+		RejectedSignals:    report.RejectedSignals,
+		FeesPaid:           report.FeesPaid,
+		SlippageCost:       report.SlippageCost,
+		FillRatio:          report.FillRatio,
+		AverageSlippageBps: report.AverageSlippageBps,
+		StoppedOrders:      report.StoppedOrders,
+		CancelRate:         report.CancelRate,
+		RealizedPnL:        report.RealizedPnL,
+		UnrealizedPnL:      report.UnrealizedPnL,
+		TotalPnL:           report.TotalPnL,
+		MaxDrawdown:        report.MaxDrawdown,
 	}
 }
 

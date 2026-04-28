@@ -17,6 +17,13 @@ htmlcov/
 .codex
 .tooling/
 
+# BMad personal overrides
+/_bmad/*.user.toml
+/_bmad/**/*.user.toml
+
+# BMad artifacts thay the docs lam project knowledge base dung chung.
+/docs/
+
 # Frontend local artifacts
 services/simulator-ui/node_modules/
 services/simulator-ui/dist/
@@ -24,6 +31,8 @@ services/simulator-ui/test-results/
 services/simulator-ui/playwright-report/
 services/simulator-ui/.vite/
 services/simulator-ui/*.tsbuildinfo
+test-results/
+artifacts/
 
 # OS/editor noise
 .DS_Store

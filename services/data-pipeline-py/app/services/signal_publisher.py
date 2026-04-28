@@ -18,13 +18,16 @@ class SignalPublisher:
         self._core_trading_internal_base_url = core_trading_internal_base_url.rstrip("/")
 
     async def publish_signals(self, signals: list[StrategySignal]) -> SignalPublishResult:
-        async with httpx.AsyncClient(timeout=5.0) as client:
-            for signal in signals:
-                response = await client.post(
-                    f"{self._core_trading_internal_base_url}/internal/signals",
-                    json=signal.model_dump(mode="json", exclude={"scenario"}),
-                )
-                response.raise_for_status()
+        try:
+            async with httpx.AsyncClient(timeout=5.0) as client:
+                for signal in signals:
+                    response = await client.post(
+                        f"{self._core_trading_internal_base_url}/internal/signals",
+                        json=signal.model_dump(mode="json", exclude={"scenario"}),
+                    )
+                    response.raise_for_status()
+        except httpx.HTTPError as exc:
+            raise RuntimeError(f"core trading signal publish failed: {exc}") from exc
 
         return SignalPublishResult(
             published_count=len(signals),

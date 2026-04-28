@@ -27,6 +27,7 @@ type Position struct {
 
 type PaperOrder struct {
 	ID                string    `json:"id"`
+	SessionID         string    `json:"session_id"`
 	AccountID         string    `json:"account_id"`
 	Symbol            string    `json:"symbol"`
 	Side              OrderSide `json:"side"`
@@ -94,9 +95,18 @@ type SimulationRules struct {
 }
 
 type MarketExecutionProfile struct {
-	SignalLatencyTicks     int     `json:"signal_latency_ticks"`
-	SpreadBps              float64 `json:"spread_bps"`
-	MaxFillNotionalPerTick float64 `json:"max_fill_notional_per_tick"`
+	SignalLatencyTicks     int                   `json:"signal_latency_ticks"`
+	SpreadBps              float64               `json:"spread_bps"`
+	MaxFillNotionalPerTick float64               `json:"max_fill_notional_per_tick"`
+	LiquidityCurve         []LiquidityCurvePoint `json:"liquidity_curve,omitempty"`
+	QueuePriority          float64               `json:"queue_priority,omitempty"`
+	MarketImpactBpsPer10k  float64               `json:"market_impact_bps_per_10k,omitempty"`
+	CancelAfterTicks       int                   `json:"cancel_after_ticks,omitempty"`
+}
+
+type LiquidityCurvePoint struct {
+	MaxNotional float64 `json:"max_notional"`
+	FillRatio   float64 `json:"fill_ratio"`
 }
 
 type SessionExecutionProfile struct {
@@ -114,10 +124,11 @@ type RulesSummary struct {
 }
 
 type OrderFilter struct {
-	Symbol string
-	Side   OrderSide
-	Limit  int
-	Offset int
+	SessionID string
+	Symbol    string
+	Side      OrderSide
+	Limit     int
+	Offset    int
 }
 
 type MarketPriceSnapshot struct {
@@ -205,6 +216,7 @@ type PendingExecution struct {
 	RequestedPrice        float64        `json:"requested_price"`
 	RemainingQuantity     float64        `json:"remaining_quantity"`
 	RemainingLatencyTicks int            `json:"remaining_latency_ticks"`
+	ElapsedExecutionTicks int            `json:"elapsed_execution_ticks,omitempty"`
 	CreatedAt             time.Time      `json:"created_at"`
 	Details               map[string]any `json:"details,omitempty"`
 }
@@ -226,21 +238,25 @@ type SymbolReport struct {
 }
 
 type SessionReport struct {
-	SessionID       string                 `json:"session_id"`
-	Status          SessionStatus          `json:"status"`
-	StartedAt       time.Time              `json:"started_at"`
-	StoppedAt       *time.Time             `json:"stopped_at,omitempty"`
-	ResetCount      int                    `json:"reset_count"`
-	FilledOrders    int                    `json:"filled_orders"`
-	RejectedSignals int                    `json:"rejected_signals"`
-	FeesPaid        float64                `json:"fees_paid"`
-	SlippageCost    float64                `json:"slippage_cost"`
-	RealizedPnL     float64                `json:"realized_pnl"`
-	UnrealizedPnL   float64                `json:"unrealized_pnl"`
-	TotalPnL        float64                `json:"total_pnl"`
-	MaxDrawdown     float64                `json:"max_drawdown"`
-	Symbols         []SymbolReport         `json:"symbols"`
-	Timeline        []SessionTimelinePoint `json:"timeline,omitempty"`
+	SessionID          string                 `json:"session_id"`
+	Status             SessionStatus          `json:"status"`
+	StartedAt          time.Time              `json:"started_at"`
+	StoppedAt          *time.Time             `json:"stopped_at,omitempty"`
+	ResetCount         int                    `json:"reset_count"`
+	FilledOrders       int                    `json:"filled_orders"`
+	RejectedSignals    int                    `json:"rejected_signals"`
+	FeesPaid           float64                `json:"fees_paid"`
+	SlippageCost       float64                `json:"slippage_cost"`
+	FillRatio          float64                `json:"fill_ratio"`
+	AverageSlippageBps float64                `json:"average_slippage_bps"`
+	StoppedOrders      int                    `json:"stopped_orders"`
+	CancelRate         float64                `json:"cancel_rate"`
+	RealizedPnL        float64                `json:"realized_pnl"`
+	UnrealizedPnL      float64                `json:"unrealized_pnl"`
+	TotalPnL           float64                `json:"total_pnl"`
+	MaxDrawdown        float64                `json:"max_drawdown"`
+	Symbols            []SymbolReport         `json:"symbols"`
+	Timeline           []SessionTimelinePoint `json:"timeline,omitempty"`
 }
 
 type PersistentState struct {
@@ -264,6 +280,7 @@ type StateStore interface {
 	LoadState(accountID string) (PersistentState, bool, error)
 	ListSessions(accountID string, filter SessionHistoryFilter) ([]SessionHistoryEntry, error)
 	LoadSessionReport(accountID string, sessionID string) (SessionReport, bool, error)
+	LoadSessionOrders(accountID string, sessionID string, filter OrderFilter) ([]PaperOrder, bool, error)
 	LoadSessionAudit(accountID string, sessionID string, limit int, offset int) ([]AuditEvent, bool, error)
 	LoadSessionTimeline(accountID string, sessionID string) ([]SessionTimelinePoint, bool, error)
 }

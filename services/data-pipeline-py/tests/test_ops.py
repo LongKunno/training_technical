@@ -23,6 +23,38 @@ def test_ops_benchmark_endpoints_require_token() -> None:
     assert response.status_code == 403
 
 
+def test_ops_benchmark_endpoints_reject_wrong_token() -> None:
+    settings = Settings(
+        ops_benchmark_enabled=True,
+        ops_benchmark_token="secret-token",
+    )
+    client = TestClient(create_app(settings=settings))
+
+    response = client.post(
+        "/internal/ops/benchmark/memory",
+        headers={"x-ops-token": "wrong-token"},
+        json={"duration_ms": 100, "allocation_mib": 8},
+    )
+
+    assert response.status_code == 403
+
+
+def test_ops_benchmark_endpoints_reject_empty_configured_token() -> None:
+    settings = Settings(
+        ops_benchmark_enabled=True,
+        ops_benchmark_token="",
+    )
+    client = TestClient(create_app(settings=settings))
+
+    response = client.post(
+        "/internal/ops/benchmark/cpu",
+        headers={"x-ops-token": ""},
+        json={"duration_ms": 100, "outer_loops": 10000},
+    )
+
+    assert response.status_code == 403
+
+
 def test_cpu_benchmark_endpoint_runs_when_enabled() -> None:
     settings = Settings(
         ops_benchmark_enabled=True,

@@ -77,20 +77,33 @@ type ExecutionProfileInput struct {
 }
 
 type MarketMicrostructureProfile struct {
-	SignalLatencyTicks     int     `json:"signal_latency_ticks"`
-	SpreadBps              float64 `json:"spread_bps"`
-	MaxFillNotionalPerTick float64 `json:"max_fill_notional_per_tick"`
+	SignalLatencyTicks     int                   `json:"signal_latency_ticks"`
+	SpreadBps              float64               `json:"spread_bps"`
+	MaxFillNotionalPerTick float64               `json:"max_fill_notional_per_tick"`
+	LiquidityCurve         []LiquidityCurvePoint `json:"liquidity_curve,omitempty"`
+	QueuePriority          float64               `json:"queue_priority,omitempty"`
+	MarketImpactBpsPer10k  float64               `json:"market_impact_bps_per_10k,omitempty"`
+	CancelAfterTicks       int                   `json:"cancel_after_ticks,omitempty"`
+}
+
+type LiquidityCurvePoint struct {
+	MaxNotional float64 `json:"max_notional"`
+	FillRatio   float64 `json:"fill_ratio"`
 }
 
 type RunMetricsSummary struct {
-	FilledOrders    int     `json:"filled_orders"`
-	RejectedSignals int     `json:"rejected_signals"`
-	FeesPaid        float64 `json:"fees_paid"`
-	SlippageCost    float64 `json:"slippage_cost"`
-	RealizedPnL     float64 `json:"realized_pnl"`
-	UnrealizedPnL   float64 `json:"unrealized_pnl"`
-	TotalPnL        float64 `json:"total_pnl"`
-	MaxDrawdown     float64 `json:"max_drawdown"`
+	FilledOrders       int     `json:"filled_orders"`
+	RejectedSignals    int     `json:"rejected_signals"`
+	FeesPaid           float64 `json:"fees_paid"`
+	SlippageCost       float64 `json:"slippage_cost"`
+	FillRatio          float64 `json:"fill_ratio"`
+	AverageSlippageBps float64 `json:"average_slippage_bps"`
+	StoppedOrders      int     `json:"stopped_orders"`
+	CancelRate         float64 `json:"cancel_rate"`
+	RealizedPnL        float64 `json:"realized_pnl"`
+	UnrealizedPnL      float64 `json:"unrealized_pnl"`
+	TotalPnL           float64 `json:"total_pnl"`
+	MaxDrawdown        float64 `json:"max_drawdown"`
 }
 
 type RunSummary struct {
@@ -244,7 +257,13 @@ type ExperimentSummaryRow struct {
 	AvgTotalPnL    float64 `json:"avg_total_pnl"`
 	BestTotalPnL   float64 `json:"best_total_pnl"`
 	WorstTotalPnL  float64 `json:"worst_total_pnl"`
+	StdDevTotalPnL float64 `json:"stddev_total_pnl"`
+	CI95TotalPnL   float64 `json:"confidence_interval_95_total_pnl"`
 	AvgMaxDrawdown float64 `json:"avg_max_drawdown"`
+	AvgFillRatio   float64 `json:"avg_fill_ratio"`
+	AvgSlippageBps float64 `json:"avg_slippage_bps"`
+	AvgCancelRate  float64 `json:"avg_cancel_rate"`
+	FailureRate    float64 `json:"failure_rate"`
 }
 
 type RunStatusUpdate struct {

@@ -1,0 +1,4 @@
+DROP INDEX IF EXISTS idx_simulation_experiments_queued_by_account;
+DROP INDEX IF EXISTS idx_simulation_runs_leaderboard_completed;
+DROP INDEX IF EXISTS idx_simulation_runs_active_by_account;
+DROP INDEX IF EXISTS idx_paper_sessions_account_status_updated;

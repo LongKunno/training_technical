@@ -62,9 +62,6 @@ func (s *StateStore) LoadState(accountID string) (papertrading.PersistentState, 
 		return papertrading.PersistentState{}, false, err
 	}
 
-	if err := loadOrders(ctx, tx, state.Account.ID, &state); err != nil {
-		return papertrading.PersistentState{}, false, err
-	}
 	if err := loadPositions(ctx, tx, state.Account.ID, &state); err != nil {
 		return papertrading.PersistentState{}, false, err
 	}
@@ -72,6 +69,9 @@ func (s *StateStore) LoadState(accountID string) (papertrading.PersistentState, 
 		return papertrading.PersistentState{}, false, err
 	}
 	if err := loadLatestSession(ctx, tx, state.Account.ID, &state); err != nil {
+		return papertrading.PersistentState{}, false, err
+	}
+	if err := loadOrders(ctx, tx, state.Account.ID, &state); err != nil {
 		return papertrading.PersistentState{}, false, err
 	}
 
@@ -123,13 +123,22 @@ func (s *StateStore) SaveState(state papertrading.PersistentState) error {
 		return err
 	}
 
-	if _, err := tx.ExecContext(ctx, `DELETE FROM paper_orders WHERE account_id = $1`, state.Account.ID); err != nil {
+	if state.Session.ID != "" {
+		if _, err := tx.ExecContext(ctx, `DELETE FROM paper_orders WHERE account_id = $1 AND session_id = $2`, state.Account.ID, state.Session.ID); err != nil {
+			return err
+		}
+	} else if _, err := tx.ExecContext(ctx, `DELETE FROM paper_orders WHERE account_id = $1 AND session_id = ''`, state.Account.ID); err != nil {
 		return err
 	}
 	for _, order := range state.Orders {
+		orderSessionID := order.SessionID
+		if orderSessionID == "" {
+			orderSessionID = state.Session.ID
+		}
 		if _, err := tx.ExecContext(ctx, `
 			INSERT INTO paper_orders (
 				id,
+				session_id,
 				account_id,
 				symbol,
 				side,
@@ -148,8 +157,8 @@ func (s *StateStore) SaveState(state papertrading.PersistentState) error {
 				terminal_reason,
 				executed_at
 			)
-			VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17, $18)
-			ON CONFLICT (id) DO UPDATE SET
+			VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17, $18, $19)
+			ON CONFLICT (session_id, id) DO UPDATE SET
 				account_id = EXCLUDED.account_id,
 				symbol = EXCLUDED.symbol,
 				side = EXCLUDED.side,
@@ -169,6 +178,7 @@ func (s *StateStore) SaveState(state papertrading.PersistentState) error {
 				executed_at = EXCLUDED.executed_at
 		`,
 			order.ID,
+			orderSessionID,
 			order.AccountID,
 			order.Symbol,
 			string(order.Side),
@@ -432,6 +442,36 @@ func (s *StateStore) LoadSessionReport(accountID string, sessionID string) (pape
 	}
 
 	return report, true, nil
+}
+
+func (s *StateStore) LoadSessionOrders(accountID string, sessionID string, filter papertrading.OrderFilter) ([]papertrading.PaperOrder, bool, error) {
+	ctx, cancel := context.WithTimeout(context.Background(), queryTimeout)
+	defer cancel()
+
+	var exists bool
+	if err := s.db.QueryRowContext(ctx, `
+		SELECT EXISTS(
+			SELECT 1 FROM paper_sessions WHERE account_id = $1 AND session_id = $2
+		)
+	`, accountID, sessionID).Scan(&exists); err != nil {
+		return nil, false, err
+	}
+	if !exists {
+		return nil, false, nil
+	}
+
+	if filter.Limit <= 0 {
+		filter.Limit = 50
+	}
+	if filter.Offset < 0 {
+		filter.Offset = 0
+	}
+
+	orders, err := queryOrders(ctx, s.db, accountID, sessionID, filter, "DESC")
+	if err != nil {
+		return nil, false, err
+	}
+	return orders, true, nil
 }
 
 func (s *StateStore) LoadSessionAudit(accountID string, sessionID string, limit int, offset int) ([]papertrading.AuditEvent, bool, error) {
@@ -1255,10 +1295,31 @@ func (s *StateStore) UpdateRunHeartbeat(accountID string, runID string, heartbea
 	return err
 }
 
-func loadOrders(ctx context.Context, tx *sql.Tx, accountID string, state *papertrading.PersistentState) error {
-	rows, err := tx.QueryContext(ctx, `
+type orderQueryer interface {
+	QueryContext(ctx context.Context, query string, args ...any) (*sql.Rows, error)
+}
+
+func queryOrders(ctx context.Context, queryer orderQueryer, accountID string, sessionID string, filter papertrading.OrderFilter, direction string) ([]papertrading.PaperOrder, error) {
+	if direction != "ASC" {
+		direction = "DESC"
+	}
+
+	if filter.Limit <= 0 {
+		filter.Limit = 50
+	}
+	if filter.Offset < 0 {
+		filter.Offset = 0
+	}
+
+	orderBy := "ORDER BY executed_at DESC, id DESC"
+	if direction == "ASC" {
+		orderBy = "ORDER BY executed_at ASC, id ASC"
+	}
+
+	rows, err := queryer.QueryContext(ctx, `
 		SELECT
 			id,
+			session_id,
 			account_id,
 			symbol,
 			side,
@@ -1278,20 +1339,26 @@ func loadOrders(ctx context.Context, tx *sql.Tx, accountID string, state *papert
 			executed_at
 		FROM paper_orders
 		WHERE account_id = $1
-		ORDER BY executed_at ASC, id ASC
-	`, accountID)
+		  AND session_id = $2
+		  AND ($3 = '' OR symbol = $3)
+		  AND ($4 = '' OR side = $4)
+		`+orderBy+`
+		LIMIT $5 OFFSET $6
+	`, accountID, sessionID, strings.TrimSpace(filter.Symbol), strings.TrimSpace(string(filter.Side)), filter.Limit, filter.Offset)
 	if err != nil {
-		return err
+		return nil, err
 	}
 	defer func() {
 		_ = rows.Close()
 	}()
 
+	orders := make([]papertrading.PaperOrder, 0)
 	for rows.Next() {
 		var order papertrading.PaperOrder
 		var side string
 		if err := rows.Scan(
 			&order.ID,
+			&order.SessionID,
 			&order.AccountID,
 			&order.Symbol,
 			&side,
@@ -1310,13 +1377,29 @@ func loadOrders(ctx context.Context, tx *sql.Tx, accountID string, state *papert
 			&order.TerminalReason,
 			&order.ExecutedAt,
 		); err != nil {
-			return err
+			return nil, err
 		}
 		order.Side = papertrading.OrderSide(side)
-		state.Orders = append(state.Orders, order)
+		orders = append(orders, order)
 	}
 
-	return rows.Err()
+	return orders, rows.Err()
+}
+
+func loadOrders(ctx context.Context, tx *sql.Tx, accountID string, state *papertrading.PersistentState) error {
+	if state.Session.ID == "" {
+		return nil
+	}
+
+	orders, err := queryOrders(ctx, tx, accountID, state.Session.ID, papertrading.OrderFilter{
+		Limit:  1000000,
+		Offset: 0,
+	}, "ASC")
+	if err != nil {
+		return err
+	}
+	state.Orders = append(state.Orders, orders...)
+	return nil
 }
 
 func (s *StateStore) loadBotVersions(ctx context.Context, botID string) ([]simulation.BotVersion, error) {

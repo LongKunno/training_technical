@@ -135,6 +135,8 @@ coreTrading:
     maxDailyLoss: "0"
     cooldownSeconds: "0"
     maxOpenNotional: "0"
+    heartbeatTimeoutSeconds: "30"
+    reconcileIntervalSeconds: "5"
     kafkaTopic: price-ticks-v1
     kafkaGroupId: core-trading-paper-engine
   resources:

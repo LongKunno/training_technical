@@ -94,7 +94,9 @@ async function sendManualSignal(request: APIRequestContext, sessionId: string) {
 }
 
 async function stopSessionIfRunning(request: APIRequestContext) {
-  const response = await request.post("/core/api/paper/session/stop", { data: {} });
+  const response = await request.post("/core/api/paper/session/stop", {
+    data: {},
+  });
 
   if (response.status() === 200) {
     return;
@@ -135,18 +137,23 @@ async function createSimulationRun(
 
 async function waitForRunTerminal(request: APIRequestContext, runId: string) {
   await expect
-    .poll(async () => {
-      const response = await request.get(`/core/api/sim/runs/${encodeURIComponent(runId)}`);
-      if (!response.ok()) {
-        return null;
-      }
-      const payload = (await response.json()) as {
-        run?: { status?: string };
-      };
-      return payload.run?.status ?? null;
-    }, {
-      timeout: RUN_TERMINAL_TIMEOUT_MS,
-    })
+    .poll(
+      async () => {
+        const response = await request.get(
+          `/core/api/sim/runs/${encodeURIComponent(runId)}`,
+        );
+        if (!response.ok()) {
+          return null;
+        }
+        const payload = (await response.json()) as {
+          run?: { status?: string };
+        };
+        return payload.run?.status ?? null;
+      },
+      {
+        timeout: RUN_TERMINAL_TIMEOUT_MS,
+      },
+    )
     .toBe("completed");
 
   const payload = await expectJson(
@@ -183,26 +190,34 @@ async function createExperiment(
   };
 }
 
-async function waitForExperimentTerminal(request: APIRequestContext, experimentId: string) {
+async function waitForExperimentTerminal(
+  request: APIRequestContext,
+  experimentId: string,
+) {
   await expect
-    .poll(async () => {
-      const response = await request.get(
-        `/core/api/sim/experiments/${encodeURIComponent(experimentId)}`,
-      );
-      if (!response.ok()) {
-        return null;
-      }
-      const payload = (await response.json()) as {
-        experiment?: { status?: string };
-      };
-      return payload.experiment?.status ?? null;
-    }, {
-      timeout: EXPERIMENT_TERMINAL_TIMEOUT_MS,
-    })
+    .poll(
+      async () => {
+        const response = await request.get(
+          `/core/api/sim/experiments/${encodeURIComponent(experimentId)}`,
+        );
+        if (!response.ok()) {
+          return null;
+        }
+        const payload = (await response.json()) as {
+          experiment?: { status?: string };
+        };
+        return payload.experiment?.status ?? null;
+      },
+      {
+        timeout: EXPERIMENT_TERMINAL_TIMEOUT_MS,
+      },
+    )
     .toBe("completed");
 
   const payload = await expectJson(
-    await request.get(`/core/api/sim/experiments/${encodeURIComponent(experimentId)}`),
+    await request.get(
+      `/core/api/sim/experiments/${encodeURIComponent(experimentId)}`,
+    ),
     200,
   );
   return payload.experiment as {
@@ -215,7 +230,11 @@ async function waitForExperimentTerminal(request: APIRequestContext, experimentI
   };
 }
 
-async function waitForSessionHistory(request: APIRequestContext, sessionId: string, status: string) {
+async function waitForSessionHistory(
+  request: APIRequestContext,
+  sessionId: string,
+  status: string,
+) {
   await expect
     .poll(async () => {
       const response = await request.get(
@@ -228,19 +247,29 @@ async function waitForSessionHistory(request: APIRequestContext, sessionId: stri
       const payload = (await response.json()) as {
         sessions?: Array<{ session_id: string; status: string }>;
       };
-      return payload.sessions?.find((session) => session.session_id === sessionId)?.status ?? null;
+      return (
+        payload.sessions?.find((session) => session.session_id === sessionId)
+          ?.status ?? null
+      );
     })
     .toBe(status);
 }
 
-async function seedSession(request: APIRequestContext, sessionId: string, stopAfterSeed = false) {
+async function seedSession(
+  request: APIRequestContext,
+  sessionId: string,
+  stopAfterSeed = false,
+) {
   await waitForProxyReadiness(request);
   await startSession(request, sessionId);
   await publishBaselineMarket(request);
   await sendManualSignal(request, sessionId);
 
   if (stopAfterSeed) {
-    await expectJson(await request.post("/core/api/paper/session/stop", { data: {} }), 200);
+    await expectJson(
+      await request.post("/core/api/paper/session/stop", { data: {} }),
+      200,
+    );
     await waitForSessionHistory(request, sessionId, "stopped");
     return;
   }
@@ -252,19 +281,33 @@ test.afterEach(async ({ request }) => {
   await stopSessionIfRunning(request);
 });
 
-test("dashboard renders current-session data from the real stack", async ({ page, request }) => {
+test("dashboard renders current-session data from the real stack", async ({
+  page,
+  request,
+}) => {
   const sessionId = `playwright-live-${randomUUID().slice(0, 8)}`;
   await seedSession(request, sessionId);
 
   await page.goto("/dashboard");
 
-  await expect(page.getByRole("heading", { name: "Current-session live monitor" })).toBeVisible();
-  await expect(page.getByRole("heading", { name: "What matters right now" })).toBeVisible();
-  await expect(page.getByText(sessionId, { exact: true })).toBeVisible();
-  await expect(page.getByRole("heading", { name: "Open positions" })).toBeVisible();
   await expect(
-    page.getByRole("table", { name: "Current positions" }).getByRole("cell", { name: "BTCUSDT" }),
+    page.getByRole("heading", { name: "Current-session live monitor" }),
   ).toBeVisible();
+  await expect(
+    page.getByRole("heading", { name: "Control room" }),
+  ).toBeVisible();
+  await expect(
+    page.getByText(sessionId, { exact: true }).first(),
+  ).toBeVisible();
+  await expect(
+    page.getByRole("heading", { name: "Open positions" }),
+  ).toBeVisible();
+  await expect(
+    page
+      .getByRole("table", { name: "Current positions" })
+      .getByRole("cell", { name: "BTCUSDT" }),
+  ).toBeVisible();
+  await page.getByRole("button", { name: "View alerts" }).click();
   await expect(page.getByText("Recent order flow available")).toBeVisible();
 });
 
@@ -275,17 +318,23 @@ test("sessions route opens immutable historical detail from the real stack", asy
   const sessionId = `playwright-history-${randomUUID().slice(0, 8)}`;
   await seedSession(request, sessionId, true);
 
-  await page.goto(`/sessions?q=${encodeURIComponent(sessionId)}&selected=${encodeURIComponent(sessionId)}`);
+  await page.goto(
+    `/sessions?q=${encodeURIComponent(sessionId)}&selected=${encodeURIComponent(sessionId)}`,
+  );
 
-  await expect(page.getByRole("heading", { name: "Recent sessions" })).toBeVisible();
+  await expect(
+    page.getByRole("heading", { name: "Recent sessions" }),
+  ).toBeVisible();
   await expect(page.getByRole("link", { name: sessionId })).toBeVisible();
   await page.getByRole("link", { name: "Open selected session" }).click();
 
   await expect(
     page.getByRole("heading", { name: `Historical detail for ${sessionId}` }),
   ).toBeVisible();
-  await expect(page.getByText("No SSE")).toBeVisible();
-  await expect(page.getByText("Positions and orders stay on the live dashboard")).toBeVisible();
+  await expect(page.getByText("No SSE").first()).toBeVisible();
+  await expect(
+    page.getByText("Historical detail is intentionally isolated"),
+  ).toBeVisible();
 });
 
 test("historical detail stays immutable while the current session keeps streaming", async ({
@@ -301,9 +350,11 @@ test("historical detail stays immutable while the current session keeps streamin
   await page.goto(`/sessions/${encodeURIComponent(historicalSessionId)}`);
 
   await expect(
-    page.getByRole("heading", { name: `Historical detail for ${historicalSessionId}` }),
+    page.getByRole("heading", {
+      name: `Historical detail for ${historicalSessionId}`,
+    }),
   ).toBeVisible();
-  await expect(page.getByText("No SSE")).toBeVisible();
+  await expect(page.getByText("No SSE").first()).toBeVisible();
 
   const timelineSummary = page.getByText(/\d+ timeline points/).first();
   const initialTimelineSummary = (await timelineSummary.textContent())?.trim();
@@ -314,31 +365,54 @@ test("historical detail stays immutable while the current session keeps streamin
   await page.waitForTimeout(1500);
 
   await expect(
-    page.getByRole("heading", { name: `Historical detail for ${historicalSessionId}` }),
+    page.getByRole("heading", {
+      name: `Historical detail for ${historicalSessionId}`,
+    }),
   ).toBeVisible();
   await expect(timelineSummary).toHaveText(initialTimelineSummary as string);
-  await expect(page.getByRole("button", { name: "Refresh detail" })).toBeVisible();
+  await expect(
+    page.getByRole("button", { name: "Refresh detail" }),
+  ).toBeVisible();
 });
 
-test("lab route runs real operator actions and records activity", async ({ page, request }) => {
+test("lab route runs real operator actions and records activity", async ({
+  page,
+  request,
+}) => {
   await waitForProxyReadiness(request);
   const sessionId = `playwright-lab-${randomUUID().slice(0, 8)}`;
 
   await page.goto("/lab");
 
-  await expect(page.getByRole("heading", { name: "Current session control" })).toBeVisible();
-  await expect(page.getByRole("heading", { name: "Operator activity feed" })).toBeVisible();
-  await expect(page.getByRole("cell", { name: "baseline-trend" })).toBeVisible();
+  await expect(
+    page.getByRole("heading", { name: "Current session control" }),
+  ).toBeVisible();
+  await expect(
+    page.getByRole("heading", { name: "Operator activity feed" }),
+  ).toBeVisible();
+  await page.getByRole("button", { name: /Strategy/i }).click();
+  await expect(
+    page.getByRole("cell", { name: "baseline-trend" }),
+  ).toBeVisible();
 
+  await page.getByRole("button", { name: /Session/i }).click();
   await page.getByLabel("Session ID").fill(sessionId);
-  await page.getByRole("button", { name: "Start" }).click();
-  await expect(page.getByText("Session started", { exact: true })).toBeVisible();
+  await page.getByRole("button", { name: "Start", exact: true }).click();
+  await expect(
+    page.getByText("Session started", { exact: true }),
+  ).toBeVisible();
 
+  await page.getByRole("button", { name: /Market/i }).click();
   await page.getByRole("button", { name: "Publish latest" }).click();
-  await expect(page.getByText("Market publish completed", { exact: true })).toBeVisible();
+  await expect(
+    page.getByText("Market publish completed", { exact: true }),
+  ).toBeVisible();
 
+  await page.getByRole("button", { name: /Manual/i }).click();
   await page.getByRole("button", { name: "Send signal" }).click();
-  await expect(page.getByText("Manual signal sent", { exact: true })).toBeVisible();
+  await expect(
+    page.getByText("Manual signal sent", { exact: true }),
+  ).toBeVisible();
 });
 
 test("experiments workflow completes on the real stack and stays out of the global leaderboard", async ({
@@ -351,7 +425,10 @@ test("experiments workflow completes on the real stack and stays out of the glob
     bot_id: "baseline-roundtrip",
     scenario_id: "baseline",
   });
-  const completedStandaloneRun = await waitForRunTerminal(request, standaloneRun.run_id);
+  const completedStandaloneRun = await waitForRunTerminal(
+    request,
+    standaloneRun.run_id,
+  );
 
   const experiment = await createExperiment(request, {
     name: `playwright-batch-${randomUUID().slice(0, 8)}`,
@@ -359,7 +436,10 @@ test("experiments workflow completes on the real stack and stays out of the glob
     scenarios: ["trend-up"],
     repetitions: 1,
   });
-  const completedExperiment = await waitForExperimentTerminal(request, experiment.experiment_id);
+  const completedExperiment = await waitForExperimentTerminal(
+    request,
+    experiment.experiment_id,
+  );
 
   expect(completedExperiment.status).toBe("completed");
   expect(completedExperiment.planned_runs).toBe(1);
@@ -367,7 +447,9 @@ test("experiments workflow completes on the real stack and stays out of the glob
   expect(completedExperiment.runs?.length).toBe(1);
 
   const summaryPayload = await expectJson(
-    await request.get(`/core/api/sim/experiments/${encodeURIComponent(experiment.experiment_id)}/summary`),
+    await request.get(
+      `/core/api/sim/experiments/${encodeURIComponent(experiment.experiment_id)}/summary`,
+    ),
     200,
   );
   expect(summaryPayload.rows).toMatchObject([
@@ -404,37 +486,56 @@ test("experiments workflow completes on the real stack and stays out of the glob
     status: "completed",
   });
 
-  const childSessionId = (childRunPayload.run as { session_id: string }).session_id;
+  const childSessionId = (childRunPayload.run as { session_id: string })
+    .session_id;
   await expectJson(
-    await request.get(`/core/api/paper/report?session_id=${encodeURIComponent(childSessionId)}`),
+    await request.get(
+      `/core/api/paper/report?session_id=${encodeURIComponent(childSessionId)}`,
+    ),
     200,
   );
   await expectJson(
-    await request.get(`/core/api/paper/audit?session_id=${encodeURIComponent(childSessionId)}&limit=50&offset=0`),
+    await request.get(
+      `/core/api/paper/audit?session_id=${encodeURIComponent(childSessionId)}&limit=50&offset=0`,
+    ),
     200,
   );
   await expectJson(
-    await request.get(`/core/api/paper/timeline?session_id=${encodeURIComponent(childSessionId)}`),
+    await request.get(
+      `/core/api/paper/timeline?session_id=${encodeURIComponent(childSessionId)}`,
+    ),
     200,
   );
 
-  await page.goto(`/experiments/${encodeURIComponent(experiment.experiment_id)}`);
-  await expect(page.getByRole("heading", { name: /playwright-batch-/i })).toBeVisible();
-  await expect(page.getByRole("table", { name: "Experiment summary" })).toContainText("buy-and-hold");
+  await page.goto(
+    `/experiments/${encodeURIComponent(experiment.experiment_id)}`,
+  );
+  await expect(
+    page.getByRole("heading", { name: /playwright-batch-/i }),
+  ).toBeVisible();
+  await expect(
+    page.getByRole("table", { name: "Experiment summary" }),
+  ).toContainText("buy-and-hold");
   await expect(page.getByRole("link", { name: childRunId })).toBeVisible();
 
   await page.getByRole("link", { name: childRunId }).click();
   await expect(page).toHaveURL(new RegExp(`/runs/${childRunId}$`));
-  await expect(page.getByRole("button", { name: "Open experiment" })).toBeVisible();
+  await expect(
+    page.getByRole("button", { name: "Open experiment" }),
+  ).toBeVisible();
   await page.getByRole("button", { name: "Open experiment" }).click();
-  await expect(page).toHaveURL(new RegExp(`/experiments/${experiment.experiment_id}$`));
+  await expect(page).toHaveURL(
+    new RegExp(`/experiments/${experiment.experiment_id}$`),
+  );
 
   await page.goto("/leaderboard");
-  await expect(page.getByRole("heading", { name: /standalone runs/i })).toBeVisible();
-  await expect(page.getByRole("table", { name: "Simulation leaderboard" })).toContainText(
-    completedStandaloneRun.run_id,
-  );
-  await expect(page.getByRole("table", { name: "Simulation leaderboard" })).not.toContainText(
-    childRunId,
-  );
+  await expect(
+    page.getByRole("heading", { name: "Standalone run leaderboard" }),
+  ).toBeVisible();
+  await expect(
+    page.getByRole("table", { name: "Simulation leaderboard" }),
+  ).toContainText(completedStandaloneRun.run_id);
+  await expect(
+    page.getByRole("table", { name: "Simulation leaderboard" }),
+  ).not.toContainText(childRunId);
 });

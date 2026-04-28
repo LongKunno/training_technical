@@ -1,7 +1,9 @@
 package server
 
 import (
+	"io"
 	"net/http"
+	"os"
 
 	"crypto_simulator/core_trading/internal/handlers"
 	"crypto_simulator/core_trading/internal/papertrading"
@@ -14,6 +16,14 @@ const (
 )
 
 func NewRouter(engine *papertrading.Engine, simService *simulation.Service) http.Handler {
+	return NewRouterWithRequestLogWriter(engine, simService, os.Stdout)
+}
+
+func NewRouterWithRequestLogWriter(
+	engine *papertrading.Engine,
+	simService *simulation.Service,
+	requestLogWriter io.Writer,
+) http.Handler {
 	mux := http.NewServeMux()
 	mux.HandleFunc("/health", handlers.NewHealthHandler(defaultServiceName, defaultMessage))
 	mux.HandleFunc("/api/paper/account", handlers.NewPaperAccountHandler(engine))
@@ -47,5 +57,5 @@ func NewRouter(engine *papertrading.Engine, simService *simulation.Service) http
 		mux.HandleFunc("POST /internal/sim/runs/{runID}/heartbeat", handlers.NewSimulationRunHeartbeatHandler(simService))
 	}
 
-	return mux
+	return WithStructuredRequestLogging(mux, requestLogWriter)
 }

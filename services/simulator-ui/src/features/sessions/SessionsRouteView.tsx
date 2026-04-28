@@ -6,8 +6,14 @@ import {
 } from "react";
 import { Link, useSearchParams } from "react-router-dom";
 
+import { formatOperatorErrorMessage } from "../../shared/api";
 import { ApiClientError } from "../../shared/api/http";
-import { ChartPanel, createTimelineAreaOption } from "../../shared/charts";
+import {
+  ChartPanel,
+  createHorizontalBarOption,
+  createStackedStatusBarOption,
+  createTimelineAreaOption,
+} from "../../shared/charts";
 import { resolveSelectedSessionId } from "../../shared/lib";
 import {
   resolveServiceAvailability,
@@ -28,10 +34,13 @@ import {
   Badge,
   Button,
   DataTable,
+  DisclosurePanel,
   EmptyState,
+  InfoTooltip,
   PageHeader,
   Panel,
   Select,
+  SummaryStrip,
   SessionsIcon,
 } from "../../shared/ui";
 import { cx } from "../../shared/ui/cx";
@@ -83,18 +92,14 @@ function setStoreFilter(
 
 function getHistoryErrorMessage(error: unknown, coreAvailability: UpstreamAvailability): string {
   if (coreAvailability === "down") {
-    return "Core trading API is unavailable. Historical review depends on /core/health and /core/api/paper/*, so the saved session index cannot load right now.";
+    return "Core Trading đang không phản hồi nên workspace lịch sử chưa tải được danh sách session đã lưu.";
   }
 
   if (error instanceof ApiClientError && error.code === "invalid_session_status") {
-    return "The requested status filter is invalid. Reset the filter and try again.";
+    return "Bộ lọc status không hợp lệ. Hãy reset filter rồi thử lại.";
   }
 
-  if (error instanceof Error) {
-    return error.message;
-  }
-
-  return "Session history could not be loaded.";
+  return formatOperatorErrorMessage(error, "Chưa tải được session history.");
 }
 
 function SessionHistoryCards({
@@ -115,7 +120,7 @@ function SessionHistoryCards({
       <EmptyState
         eyebrow="History queue"
         title="No sessions matched this filter"
-        description="Try another search term or reset the status filter. Historical sessions remain immutable once saved."
+        description="Hãy thử từ khóa khác hoặc reset status filter. Session đã lưu vẫn giữ nguyên khi được đọc lại."
         icon={<SessionsIcon className="size-5" />}
       />
     );
@@ -156,7 +161,7 @@ function SessionHistoryCards({
                 </div>
                 <h3 className="mt-3 text-lg font-medium text-white">{session.session_id}</h3>
                 <p className="mt-2 text-sm leading-6 text-slate-400">
-                  Started {formatDateTime(session.started_at)}. Reset count {formatInteger(session.reset_count)}.
+                  Bắt đầu lúc {formatDateTime(session.started_at)}. Reset {formatInteger(session.reset_count)} lần.
                 </p>
               </button>
 
@@ -196,6 +201,26 @@ function HistoryLoadingState() {
   );
 }
 
+function buildStatusChartPoints(sessions: SessionHistoryEntry[]) {
+  const running = sessions.filter((session) => session.status === "running").length;
+  const stopped = sessions.filter((session) => session.status === "stopped").length;
+
+  return [
+    { label: "Running", value: running, color: "#42d9ba" },
+    { label: "Stopped", value: stopped, color: "#f4be51" },
+  ];
+}
+
+function buildTopPnlPoints(sessions: SessionHistoryEntry[]) {
+  return [...sessions]
+    .sort((left, right) => right.total_pnl - left.total_pnl)
+    .slice(0, 5)
+    .map((session) => ({
+      label: session.session_id,
+      value: session.total_pnl,
+    }));
+}
+
 function SessionHistoryFiltersForm({
   filter,
   onReset,
@@ -226,7 +251,7 @@ function SessionHistoryFiltersForm({
     <Panel
       eyebrow="Filters"
       title="History toolbar"
-      description="Search by session ID, filter by session status, and page through the newest saved runs."
+      description="Tìm theo session ID, lọc theo status và chuyển trang trên danh sách mới nhất."
       actions={
         <div className="flex flex-wrap gap-3">
           <Button tone="ghost" onClick={onReset}>
@@ -290,10 +315,11 @@ export function SessionsRouteView() {
   const coreAvailability = resolveServiceAvailability(coreHealthQuery);
   const currentSessionQuery = useCurrentSessionQuery();
   const historyQuery = useSessionHistoryQuery(parsedFilter);
+  const currentSessionId = currentSessionQuery.data?.id ?? null;
 
   const sessions = sortSessionHistory(historyQuery.data ?? []);
   const selectedPreviewId = resolveSelectedSessionId({
-    currentSessionId: currentSessionQuery.data?.id ?? null,
+    currentSessionId,
     selectedSessionId: selectedSessionSearchParam ?? selectedSessionId,
     sessions,
   });
@@ -420,9 +446,20 @@ export function SessionsRouteView() {
     ? getHistoryErrorMessage(historyQuery.error, coreAvailability)
     : null;
   const pageNumber = getPageNumber(parsedFilter);
+  const pageSummary = getPageSummary(parsedFilter, sessions.length);
   const hasNextPage = sessions.length === parsedFilter.limit;
   const selectedPreviewSession =
     sessions.find((session) => session.session_id === selectedPreviewId) ?? null;
+  const runningSessions = sessions.filter((session) => session.status === "running").length;
+  const terminalSessions = sessions.length - runningSessions;
+  const statusChartOption = sessions.length
+    ? createStackedStatusBarOption(buildStatusChartPoints(sessions))
+    : undefined;
+  const topPnlChartOption = sessions.length
+    ? createHorizontalBarOption(buildTopPnlPoints(sessions), {
+        formatter: (value) => formatSignedCurrency(value),
+      })
+    : undefined;
   const previewChartTitle = selectedPreviewId
     ? `Timeline preview for ${selectedPreviewId}`
     : "Selected session timeline";
@@ -433,7 +470,7 @@ export function SessionsRouteView() {
     ? getHistoryErrorMessage(previewReportQuery.error, coreAvailability)
     : previewTimelineQuery.isError
       ? getHistoryErrorMessage(previewTimelineQuery.error, coreAvailability)
-      : "This session does not have a stored timeline snapshot yet. Historical detail can still render report and audit data safely.";
+      : "Session này chưa lưu timeline snapshot. Anh vẫn có thể mở historical detail để xem report và audit một cách an toàn.";
   const selectedDetailHref = selectedPreviewId
     ? buildSessionDetailPath(selectedPreviewId, {
         filter: parsedFilter,
@@ -442,11 +479,13 @@ export function SessionsRouteView() {
     : null;
 
   return (
-    <>
+    <div className="space-y-6">
       <PageHeader
+        variant="compact"
+        tone="soft"
         eyebrow="Session History"
         title="Historical review workspace"
-        description="Search, page, and compare saved sessions here without contaminating the live operator route. The selected preview is encoded into the URL so refresh, back-forward, and detail navigation keep the same reading context."
+        description="Historical-only workspace để đọc lại session đã lưu, khóa preview theo URL, và mở immutable detail mà không chạm vào dashboard realtime."
         actions={
           <>
             <Button
@@ -468,26 +507,88 @@ export function SessionsRouteView() {
           </>
         }
         meta={[
-          { label: "Default sort", value: "Newest first" },
+          { label: "Mode", value: "Historical only" },
+          { label: "Selected", value: selectedPreviewId ?? "None" },
           { label: "Filter state", value: getFilterSummary(parsedFilter) },
           { label: "Page", value: `${pageNumber}` },
-          { label: "Selected", value: selectedPreviewId ?? "None" },
         ]}
         aside={
           <div className="rounded-[24px] border border-white/8 bg-white/[0.04] p-5">
-            <Badge tone="info" leading={<SessionsIcon className="size-3" />}>
-              Historical review route
-            </Badge>
+            <div className="flex flex-wrap items-center gap-2">
+              <Badge tone="info" leading={<SessionsIcon className="size-3" />}>
+                Historical review route
+              </Badge>
+              <Badge tone="warning">No SSE</Badge>
+            </div>
             <p className="mt-4 text-sm leading-6 text-slate-400">
-              No current-session SSE subscription is mounted here. The only live dependency is a
-              one-shot current-session lookup used to choose a default selection when that session
-              already exists in history.
+              Workspace này không mount current-session SSE. Nó chỉ gọi một lần current session để chọn sẵn preview mặc định nếu session đó đã có trong history.
             </p>
-            <p className="mt-3 text-sm leading-6 text-slate-500">
-              Refresh-safe preview: {selectedPreviewId ?? "No session selected yet"}.
-            </p>
+            <DisclosurePanel className="mt-4" label="View route notes" contentClassName="space-y-2">
+              <p>Preview hiện tại được encode vào URL nên refresh, back-forward và mở detail vẫn giữ nguyên context đọc dở.</p>
+              <p>Session history là bề mặt chỉ-đọc. Nếu anh cần dữ liệu live đang đổi theo thời gian, quay lại Dashboard thay vì ở đây.</p>
+            </DisclosurePanel>
           </div>
         }
+      />
+
+      <SummaryStrip
+        items={[
+          {
+            badge: (
+              <Badge tone={selectedPreviewSession ? getStatusTone(selectedPreviewSession.status) : "neutral"}>
+                {selectedPreviewSession ? formatStatusLabel(selectedPreviewSession.status) : "Pending"}
+              </Badge>
+            ),
+            label: "Selected",
+            meta: selectedPreviewSession
+              ? `Updated ${formatDateTime(selectedPreviewSession.last_event_at)}`
+              : "Chọn một session đã lưu để khóa preview.",
+            tone: selectedPreviewSession ? "accent" : "neutral",
+            value: selectedPreviewId ?? "None",
+          },
+          {
+            badge: (
+              <Badge
+                tone={
+                  selectedPreviewSession
+                    ? selectedPreviewSession.total_pnl < 0
+                      ? "danger"
+                      : "success"
+                    : "neutral"
+                }
+              >
+                PnL
+              </Badge>
+            ),
+            label: "Selected PnL",
+            meta: selectedPreviewSession
+              ? `${formatInteger(selectedPreviewSession.filled_orders)} fills · max DD ${formatDrawdown(selectedPreviewSession.max_drawdown)}`
+              : "PnL, fills và drawdown sẽ hiện khi preview được khóa.",
+            tone:
+              selectedPreviewSession && selectedPreviewSession.total_pnl < 0
+                ? "danger"
+                : selectedPreviewSession
+                  ? "success"
+                  : "neutral",
+            value: selectedPreviewSession ? formatSignedCurrency(selectedPreviewSession.total_pnl) : "-",
+          },
+          {
+            badge: <Badge tone="info">Visible</Badge>,
+            label: "Visible sessions",
+            meta: `${formatInteger(runningSessions)} running · ${formatInteger(terminalSessions)} terminal`,
+            tone: "neutral",
+            value: formatInteger(sessions.length),
+          },
+          {
+            badge: <Badge tone={currentSessionId ? "success" : "neutral"}>Current</Badge>,
+            label: "Current session",
+            meta: currentSessionId
+              ? "Chỉ seed preview mặc định nếu session đó đã được lưu."
+              : "Chưa có current session để seed selection mặc định.",
+            tone: currentSessionId ? "success" : "neutral",
+            value: currentSessionId ?? "None",
+          },
+        ]}
       />
 
       <SessionHistoryFiltersForm
@@ -500,8 +601,13 @@ export function SessionsRouteView() {
       <section className="grid gap-6 xl:grid-cols-[minmax(0,1.15fr)_minmax(340px,0.85fr)]">
         <Panel
           eyebrow="History queue"
-          title="Recent sessions"
-          description="Selecting a row here only changes the historical preview. The live dashboard remains on its own current-session track."
+          title={
+            <span className="inline-flex items-center gap-2">
+              Recent sessions
+              <InfoTooltip content="Chọn một row ở đây chỉ đổi preview lịch sử. Nó không làm thay đổi dashboard realtime và cũng không mount SSE." />
+            </span>
+          }
+          description="Chọn row để đổi preview lịch sử, không ảnh hưởng live dashboard."
         >
           {historyQuery.isLoading ? (
             <HistoryLoadingState />
@@ -520,7 +626,7 @@ export function SessionsRouteView() {
                   selectedSessionId: sessionId,
                 })
               }
-              currentSessionId={currentSessionQuery.data?.id ?? null}
+              currentSessionId={currentSessionId}
               sessions={sessions}
               selectedSessionId={selectedPreviewId}
               onSelect={handleSelectSession}
@@ -528,17 +634,165 @@ export function SessionsRouteView() {
           )}
         </Panel>
 
+        <div className="grid gap-6">
+          <Panel
+            eyebrow="Selected preview"
+            title={
+              selectedPreviewId ? `Preview locked on ${selectedPreviewId}` : "No preview locked"
+            }
+            description="Preview hiện tại được giữ theo URL để giữ nguyên context khi điều hướng."
+            actions={
+              selectedDetailHref ? (
+                <Link to={selectedDetailHref} className={linkButtonClassName()}>
+                  Open preview detail
+                </Link>
+              ) : undefined
+            }
+          >
+            {selectedPreviewSession ? (
+              <div className="grid gap-4">
+                <div className="flex flex-wrap items-center gap-2">
+                  <Badge tone={getStatusTone(selectedPreviewSession.status)}>
+                    {formatStatusLabel(selectedPreviewSession.status)}
+                  </Badge>
+                  {selectedPreviewSession.session_id === currentSessionId ? (
+                    <Badge tone="info">Current session</Badge>
+                  ) : null}
+                  <Badge tone="warning">URL-backed selection</Badge>
+                </div>
+
+                <DisclosurePanel label="View preview notes" contentClassName="space-y-2">
+                  <p>Preview này chỉ đọc snapshot lịch sử của session đã chọn. Nó không nhận update live và không thay thế cho dashboard đang theo dõi current session.</p>
+                  <p>Khi anh mở detail, cùng selection này sẽ đi theo URL để không mất mạch đọc hiện tại.</p>
+                </DisclosurePanel>
+
+                <div className="grid gap-3 sm:grid-cols-2">
+                  <div className="rounded-[20px] border border-white/8 bg-white/[0.04] px-4 py-3">
+                    <div className="text-[11px] uppercase tracking-[0.16em] text-slate-500">
+                      Last event
+                    </div>
+                    <div className="mt-2 text-sm font-medium text-white">
+                      {formatDateTime(selectedPreviewSession.last_event_at)}
+                    </div>
+                  </div>
+                  <div className="rounded-[20px] border border-white/8 bg-white/[0.04] px-4 py-3">
+                    <div className="text-[11px] uppercase tracking-[0.16em] text-slate-500">
+                      Reset count
+                    </div>
+                    <div className="mt-2 text-sm font-medium text-white">
+                      {formatInteger(selectedPreviewSession.reset_count)}
+                    </div>
+                  </div>
+                  <div className="rounded-[20px] border border-white/8 bg-white/[0.04] px-4 py-3">
+                    <div className="text-[11px] uppercase tracking-[0.16em] text-slate-500">
+                      Filled orders
+                    </div>
+                    <div className="mt-2 text-sm font-medium text-white">
+                      {formatInteger(selectedPreviewSession.filled_orders)}
+                    </div>
+                  </div>
+                  <div className="rounded-[20px] border border-white/8 bg-white/[0.04] px-4 py-3">
+                    <div className="text-[11px] uppercase tracking-[0.16em] text-slate-500">
+                      Total PnL
+                    </div>
+                    <div className="mt-2 text-sm font-medium text-white">
+                      {formatSignedCurrency(selectedPreviewSession.total_pnl)}
+                    </div>
+                  </div>
+                </div>
+              </div>
+            ) : (
+              <EmptyState
+                eyebrow="Selected preview"
+                title="Choose one saved session"
+                description="Hãy chọn một session từ queue hoặc table để xem timeline preview trước khi mở immutable detail."
+                icon={<SessionsIcon className="size-5" />}
+              />
+            )}
+          </Panel>
+
+          <ChartPanel
+            tone="soft"
+            eyebrow="Preview"
+            title={
+              <span className="inline-flex items-center gap-2">
+                {previewChartTitle}
+                <InfoTooltip content="Chart này chỉ đọc snapshot timeline của session đang chọn. Nó không tự cập nhật theo current session." />
+              </span>
+            }
+            description="Chỉ đọc timeline của historical session đang được chọn."
+            chart={{
+              emptyDescription: previewEmptyDescription,
+              emptyTitle: previewEmptyTitle,
+              height: 320,
+              loading: previewReportQuery.isLoading || previewTimelineQuery.isLoading,
+              option: previewChartOption,
+            }}
+            footer={
+              selectedPreviewSession ? (
+                <>
+                  <Badge tone={getStatusTone(selectedPreviewSession.status)}>
+                    {formatStatusLabel(selectedPreviewSession.status)}
+                  </Badge>
+                  <span>Total PnL {formatSignedCurrency(selectedPreviewSession.total_pnl)}</span>
+                  <span>{formatInteger(selectedPreviewSession.filled_orders)} filled orders</span>
+                  <span>Preview encoded in route search params</span>
+                </>
+              ) : (
+                <>
+                  <Badge tone="warning">Historical only</Badge>
+                  <span>Chọn một session đã lưu để xem timeline preview.</span>
+                </>
+              )
+            }
+          />
+        </div>
+      </section>
+
+      <section className="grid gap-6 xl:grid-cols-2">
         <ChartPanel
           tone="soft"
-          eyebrow="Preview"
-          title={previewChartTitle}
-          description="Preview reads only the selected historical session. URL-backed selection means the same context survives refreshes and the dedicated detail route."
+          eyebrow="Status mix"
+          title={
+            <span className="inline-flex items-center gap-2">
+              Visible session status
+              <InfoTooltip content="Biểu đồ này cho biết tỷ lệ running và stopped của đúng tập session đang hiển thị sau khi áp filter hiện tại." />
+            </span>
+          }
+          description="Tỷ lệ status của page hiện tại."
           chart={{
-            emptyDescription: previewEmptyDescription,
-            emptyTitle: previewEmptyTitle,
-            height: 320,
-            loading: previewReportQuery.isLoading || previewTimelineQuery.isLoading,
-            option: previewChartOption,
+            emptyDescription: "Chưa có session nào trên page hiện tại để tổng hợp status.",
+            emptyTitle: "No visible session status",
+            height: 220,
+            loading: historyQuery.isLoading,
+            option: statusChartOption,
+          }}
+          footer={
+            sessions.length ? (
+              <>
+                <Badge tone="info">{formatInteger(sessions.length)} visible</Badge>
+                <span>{getFilterSummary(parsedFilter)}</span>
+              </>
+            ) : undefined
+          }
+        />
+
+        <ChartPanel
+          tone="soft"
+          eyebrow="Outcome"
+          title={
+            <span className="inline-flex items-center gap-2">
+              Top session PnL
+              <InfoTooltip content="Biểu đồ này xếp những session có PnL cao nhất trong danh sách đang hiển thị để anh scan nhanh outcome tốt nhất." />
+            </span>
+          }
+          description="Top outcome theo PnL trên tập session đang thấy."
+          chart={{
+            emptyDescription: "Chưa có session nào để so PnL trên page hiện tại.",
+            emptyTitle: "No top session PnL",
+            height: 260,
+            loading: historyQuery.isLoading,
+            option: topPnlChartOption,
           }}
           footer={
             selectedPreviewSession ? (
@@ -546,27 +800,25 @@ export function SessionsRouteView() {
                 <Badge tone={getStatusTone(selectedPreviewSession.status)}>
                   {formatStatusLabel(selectedPreviewSession.status)}
                 </Badge>
-                <span>Total PnL {formatSignedCurrency(selectedPreviewSession.total_pnl)}</span>
-                <span>{formatInteger(selectedPreviewSession.filled_orders)} filled orders</span>
-                <span>Preview encoded in route search params</span>
+                <span>Selected {selectedPreviewSession.session_id}</span>
               </>
-            ) : (
-              <>
-                <Badge tone="warning">Historical only</Badge>
-                <span>Select a saved session to preview timeline context.</span>
-              </>
-            )
+            ) : undefined
           }
         />
       </section>
 
       <Panel
         eyebrow="Table"
-        title="Session index"
-        description="Paging stays contract-compatible with limit and offset. Rows link directly to the dedicated historical detail route."
+        title={
+          <span className="inline-flex items-center gap-2">
+            Session index
+            <InfoTooltip content="Bảng này vẫn dùng đúng limit/offset của contract hiện tại. Row đang được chọn làm preview sẽ được highlight để anh không mất ngữ cảnh." />
+          </span>
+        }
+        description="Bảng lịch sử đầy đủ cho page hiện tại."
         actions={
           <div className="flex flex-wrap items-center gap-3 text-sm text-slate-400">
-            <span>{getPageSummary(parsedFilter, sessions.length)}</span>
+            <span>{pageSummary}</span>
             <Button
               tone="ghost"
               size="sm"
@@ -637,11 +889,18 @@ export function SessionsRouteView() {
           ]}
           rows={sessions}
           getRowId={(row) => row.session_id}
+          getRowClassName={(row) =>
+            row.session_id === selectedPreviewId
+              ? "bg-sky-300/[0.06]"
+              : row.session_id === currentSessionId
+                ? "bg-white/[0.02]"
+                : undefined
+          }
           emptyTitle="No saved sessions"
-          emptyDescription="Historical sessions returned by /api/paper/sessions render here."
+          emptyDescription="Các historical session trả về từ /api/paper/sessions sẽ hiện ở đây."
           className={historyQuery.isFetching ? "opacity-70" : undefined}
         />
       </Panel>
-    </>
+    </div>
   );
 }

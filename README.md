@@ -9,7 +9,7 @@ Repo này đang đi theo hướng `simulator-first` và `formula-first bot evalu
   - HTTP APIs cho `account`, `portfolio`, `positions`, `rules`, `orders`
   - simulation APIs cho `bot catalog`, `run queue`, `run detail`, `run stop`, `experiment list/detail/summary/stop`, và `leaderboard`
   - mỗi simulation run chụp lại `execution_profile_snapshot`, `market_profile_snapshot`, `metrics_snapshot`, và `stopped_reason` để history/compare ổn định
-  - execution realism v1 đã dùng `market_profile_snapshot` để mô phỏng `signal latency`, `spread`, `per-tick fill cap`, và `split-fill`; runtime cũng persist `pending executions` để restore đúng sau restart
+  - execution realism v2 đã dùng `market_profile_snapshot` để mô phỏng `signal latency`, `spread`, `per-tick fill cap`, `split-fill`, `liquidity curve`, `queue priority`, `market impact`, và `cancel-after-ticks`; runtime cũng persist `pending executions` để restore đúng sau restart
   - `/api/sim/leaderboard` giữ semantics `completed standalone runs only`; aggregate compare của batch chỉ nằm ở experiment detail
   - internal APIs cho `market price ingest` và `signals`
   - internal callback để `bot_runner` cập nhật trạng thái run và heartbeat; stale heartbeat sẽ fail run với reason `runner_lost`
@@ -30,9 +30,10 @@ Repo này đang đi theo hướng `simulator-first` và `formula-first bot evalu
   - frontend product-grade `React + Vite + TypeScript` cho operator dashboard, session history/detail và lab controls
   - thêm workspace `/runs`, `/runs/:runId`, `/experiments`, `/experiments/:experimentId`, và `/leaderboard` cho bot evaluation
   - `/runs` là single-run workflow; `/experiments` là batch workflow; `/leaderboard` chỉ đọc completed standalone runs
-  - Node runtime serve bundle và same-origin proxy sang Go/Python services qua `/core/*` và `/data/*`
-  - shell, dashboard, và lab đã surface trực tiếp trạng thái `/core/health`, `/data/health`, và current-session SSE để operator thấy degraded state sớm
-  - runtime chặn browser access tới `/core/internal/ops*` và `/data/internal/ops*`
+  - Node runtime serve bundle và same-origin proxy sang Go/Python services qua `/core/*`, `/data/*`, và health-only `/bot/health`; Vite dev proxy giữ cùng browser boundary
+  - shell, dashboard, và lab đã surface trực tiếp trạng thái `/core/health`, `/data/health`, `/bot/health`, và current-session SSE để operator thấy degraded state sớm
+  - dashboard hiện phân biệt rõ 4 mode: `live`, `stopped snapshot`, `no live session`, `backend down`; SSE chỉ mount khi current session đang `running`
+  - runtime/dev proxy chặn browser access tới `/core/internal/ops*`, `/data/internal/ops*`, và `/bot/internal/*`
   - Docker dev override cho Vite hot reload qua `docker-compose.ui-dev.yml`
   - Docker E2E runner riêng qua `docker-compose.ui-e2e.yml` cho `vitest` và `playwright`
 - `docker-compose.yml`
@@ -48,12 +49,15 @@ Repo này đang đi theo hướng `simulator-first` và `formula-first bot evalu
   - `simulator_ui` -> `http://localhost:18020`
   - K8s ingress -> `http://simulator.localtest.me:18020`
 
-## Tài liệu nên đọc
+## BMad knowledge base nên đọc
 
-- [Hướng dẫn vận hành cho AI](docs/ai-operating-guide.md)
-- [Theo dõi tiến độ hiện tại](docs/progress-tracker.md)
-- [Kiến trúc hệ thống chi tiết](docs/architecture.md)
-- [Ánh xạ roadmap](docs/roadmap_mapping.md)
+- [Project context](_bmad-output/project-context.md)
+- [Progress tracker](_bmad-output/implementation-artifacts/progress-tracker.md)
+- [Roadmap](_bmad-output/planning-artifacts/roadmap.md)
+- [Kiến trúc hệ thống](_bmad-output/planning-artifacts/architecture.md)
+- [API contracts](_bmad-output/planning-artifacts/api-contracts.md)
+- [Source tree](_bmad-output/planning-artifacts/source-tree.md)
+- [Verification matrix](_bmad-output/test-artifacts/verification-matrix.md)
 - [Rule Docker-only test](.antigravityrules)
 
 ## Khởi động nhanh
@@ -132,6 +136,7 @@ Health checks:
 curl http://localhost:18080/health
 curl http://localhost:18000/health
 curl http://localhost:18020/health
+curl http://localhost:18020/bot/health
 ```
 
 Operator UI Compose: `http://localhost:18020`
@@ -143,6 +148,8 @@ make typecheck-ui
 make lint-ui
 make test-ui
 make build-ui
+make rebuild-ui-runtime
+make restart-ui-runtime
 make test-e2e-ui
 make test-e2e-ui-live
 make test-e2e-ui-restore
@@ -157,6 +164,7 @@ make lint-bot-runner
 
 `make up` dùng Node runtime production-like để serve bundle đã build. `make up-ui-dev` dùng cùng service `simulator_ui` nhưng override sang target `dev` và expose Vite trên cùng host port `18020`, nên hai flow này là thay thế nhau chứ không chạy song song.
 `make typecheck-ui`, `make lint-ui`, `make build-ui`, `make test-ui`, `make test-e2e-ui`, `make test-e2e-ui-live`, và `make test-e2e-ui-restore` đều chạy trong Docker runner để không phụ thuộc Node trên host.
+`make rebuild-ui-runtime` chạy lại `typecheck + lint + build` cho UI rồi rebuild/restart riêng service `simulator_ui` mà không đụng toàn stack. `make restart-ui-runtime` chỉ restart riêng runtime UI đang chạy.
 `make test-e2e-ui-live` tự dựng stack tạm, chạy Playwright live acceptance, rồi teardown bằng `trap` kể cả khi test fail.
 `make test-e2e-ui-restore` dựng stack tạm, seed restore state, restart `core_trading`, verify backend restore, rồi chạy browser acceptance cho UI sau restart.
 
@@ -290,7 +298,7 @@ curl -X POST http://localhost:18080/api/sim/experiments/sim-exp-123/stop
 curl 'http://localhost:18080/api/sim/leaderboard?limit=20&offset=0'
 ```
 
-`microstructure_profile` từ catalog hiện đã đi vào execution realism v1 trong paper engine: `signal latency`, `spread`, `per-tick fill cap`, và `split-fill` ảnh hưởng trực tiếp tới order execution. `market_profile_snapshot` vẫn được persist trên run để replay/compare đúng context, còn venue-depth realism sâu hơn vẫn là wave sau.
+`microstructure_profile` từ catalog hiện đã đi vào execution realism v2 trong paper engine: `signal latency`, `spread`, `per-tick fill cap`, `split-fill`, `liquidity curve`, `queue priority`, `market impact`, và `cancel-after-ticks` ảnh hưởng trực tiếp tới order execution. `market_profile_snapshot` vẫn được persist trên run để replay/compare đúng context.
 
 ## Verify trong Docker
 
@@ -299,10 +307,14 @@ Mọi loại test và smoke chỉ được chạy trong Docker.
 ```bash
 make lint-go
 make lint-py
+make lint-bot-runner
 make test-go
 make test-py
 make test-bot-runner
+make typecheck-ui
+make lint-ui
 make test-ui
+make build-ui
 make test-e2e-ui
 make test-e2e-ui-live
 make test-e2e-ui-restore
@@ -353,6 +365,13 @@ Smoke `make smoke-sim-experiment` verify chuỗi:
 
 ```text
 UI/core/data/bot-runner healthy -> create standalone run -> wait completed -> create experiment -> wait terminal -> read experiment detail -> read summary -> list child runs by experiment_id -> read child run detail + report/audit/timeline -> verify leaderboard vẫn chỉ giữ standalone runs
+```
+
+Simulation smoke có thể ghi JSON artifact để CI hoặc operator đọc lại kết quả chính:
+
+```bash
+SMOKE_ARTIFACT_DIR=artifacts/smoke make smoke-sim-run
+SMOKE_ARTIFACT_DIR=artifacts/smoke make smoke-sim-experiment
 ```
 
 Live UI acceptance hiện verify thêm:

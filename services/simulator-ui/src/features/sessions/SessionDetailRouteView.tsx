@@ -1,6 +1,7 @@
-import { useEffect } from "react";
+import { useEffect, useState } from "react";
 import { Link, useLocation, useParams } from "react-router-dom";
 
+import { formatOperatorErrorMessage } from "../../shared/api";
 import { ApiClientError } from "../../shared/api/http";
 import { ChartPanel, createTimelineAreaOption } from "../../shared/charts";
 import {
@@ -19,17 +20,19 @@ import {
   EmptyState,
   PageHeader,
   Panel,
+  SectionTabPanel,
+  SectionTabs,
   ShieldIcon,
-  SparklineIcon,
-  StatCard,
+  SummaryStrip,
 } from "../../shared/ui";
 import {
   buildSessionsPath,
-  formatCurrency,
+  formatBps,
   formatDateTimeWithSeconds,
   formatDrawdown,
   formatEventType,
   formatInteger,
+  formatPercentRatio,
   formatSignedCurrency,
   formatStatusLabel,
   getAuditTone,
@@ -74,15 +77,11 @@ function getDetailErrorState(error: unknown, coreAvailability: UpstreamAvailabil
     };
   }
 
-  if (error instanceof Error) {
-    return {
-      description: error.message,
-      title: "Historical session detail is unavailable",
-    };
-  }
-
   return {
-    description: "Historical report, audit, and timeline data could not be loaded.",
+    description: formatOperatorErrorMessage(
+      error,
+      "Historical report, audit, and timeline data could not be loaded.",
+    ),
     title: "Historical session detail is unavailable",
   };
 }
@@ -90,6 +89,7 @@ function getDetailErrorState(error: unknown, coreAvailability: UpstreamAvailabil
 export function SessionDetailRouteView() {
   const { sessionId = "" } = useParams();
   const location = useLocation();
+  const [activeTab, setActiveTab] = useState("report");
   const sessionHistoryFilter = useOperatorUiStore(selectSessionHistoryFilter);
   const setSelectedSessionId = useOperatorUiStore((state) => state.setSelectedSessionId);
   const coreHealthQuery = useCoreHealthQuery();
@@ -182,40 +182,43 @@ export function SessionDetailRouteView() {
 
       {report ? (
         <>
-          <section className="grid gap-4 md:grid-cols-2 2xl:grid-cols-4">
-            <StatCard
-              label="Total PnL"
-              value={formatSignedCurrency(report.total_pnl)}
-              detail={`Realized ${formatSignedCurrency(report.realized_pnl)}`}
-              trend="historical"
-              tone={report.total_pnl >= 0 ? "success" : "warning"}
-              icon={<SparklineIcon className="size-5" />}
-            />
-            <StatCard
-              label="Filled orders"
-              value={formatInteger(report.filled_orders)}
-              detail={`${formatInteger(report.rejected_signals)} rejected signals`}
-              trend={formatStatusLabel(report.status)}
-              icon={<ShieldIcon className="size-5" />}
-            />
-            <StatCard
-              label="Fees paid"
-              value={formatCurrency(report.fees_paid)}
-              detail={`Slippage ${formatCurrency(report.slippage_cost)}`}
-              trend="execution cost"
-              icon={<ShieldIcon className="size-5" />}
-            />
-            <StatCard
-              label="Max drawdown"
-              value={formatDrawdown(report.max_drawdown)}
-              detail="Legacy snapshots without timeline still render safely."
-              trend={timeline.length > 0 ? "snapshot-backed" : "empty timeline fallback"}
-              tone="warning"
-              icon={<SparklineIcon className="size-5" />}
-            />
-          </section>
+          <SummaryStrip
+            items={[
+              {
+                badge: <Badge tone={report.total_pnl >= 0 ? "success" : "warning"}>PnL</Badge>,
+                label: "Total PnL",
+                meta: `Realized ${formatSignedCurrency(report.realized_pnl)}`,
+                tone: report.total_pnl >= 0 ? "success" : "warning",
+                value: formatSignedCurrency(report.total_pnl),
+              },
+              {
+                badge: <Badge tone={getStatusTone(report.status)}>{formatStatusLabel(report.status)}</Badge>,
+                label: "Filled orders",
+                meta: `${formatInteger(report.rejected_signals)} rejected signals`,
+                tone: "accent",
+                value: formatInteger(report.filled_orders),
+              },
+              {
+                badge: <Badge tone="info">Execution</Badge>,
+                label: "Fill quality",
+                meta: `Avg slippage ${formatBps(report.average_slippage_bps)} · ${formatInteger(report.stopped_orders ?? 0)} stopped`,
+                tone: "neutral",
+                value: formatPercentRatio(report.fill_ratio),
+              },
+              {
+                badge: <Badge tone="warning">Drawdown</Badge>,
+                label: "Max drawdown",
+                meta:
+                  timeline.length > 0
+                    ? `${formatInteger(timeline.length)} timeline points`
+                    : "Legacy snapshots without timeline still render safely.",
+                tone: "warning",
+                value: formatDrawdown(report.max_drawdown),
+              },
+            ]}
+          />
 
-          <section className="grid gap-6 xl:grid-cols-[minmax(0,1.3fr)_minmax(320px,0.7fr)]">
+          <section className="grid gap-6 xl:grid-cols-[minmax(0,1.35fr)_minmax(340px,0.82fr)]">
             <ChartPanel
               tone="soft"
               eyebrow="Timeline"
@@ -239,75 +242,96 @@ export function SessionDetailRouteView() {
             />
 
             <Panel
-              eyebrow="Report"
-              title="Session summary"
-              description="Core recap metrics come from the session-scoped report surface."
+              density="dense"
+              eyebrow="Review"
+              title="Session detail tabs"
+              description="Chuyển nhanh giữa report, audit và context mà không phải cuộn qua nhiều khối phụ."
             >
-              <dl className="grid gap-3">
-                {getReportMetrics(report).map(([label, value]) => (
-                  <div
-                    key={label}
-                    className="flex items-center justify-between gap-4 rounded-[20px] border border-white/8 bg-white/[0.04] px-4 py-3 text-sm"
-                  >
-                    <dt className="text-slate-400">{label}</dt>
-                    <dd className="font-medium text-white">{value}</dd>
-                  </div>
-                ))}
-                <div className="flex items-center justify-between gap-4 rounded-[20px] border border-white/8 bg-white/[0.04] px-4 py-3 text-sm">
-                  <dt className="text-slate-400">Symbols traded</dt>
-                  <dd className="font-medium text-white">{formatInteger(report.symbols.length)}</dd>
-                </div>
-                <div className="flex items-center justify-between gap-4 rounded-[20px] border border-white/8 bg-white/[0.04] px-4 py-3 text-sm">
-                  <dt className="text-slate-400">Unrealized PnL</dt>
-                  <dd className="font-medium text-white">
-                    {formatSignedCurrency(report.unrealized_pnl)}
-                  </dd>
-                </div>
-              </dl>
-            </Panel>
-          </section>
+              <SectionTabs
+                label="Session detail tabs"
+                tabs={[
+                  { value: "report", label: "Report" },
+                  { value: "audit", label: "Audit", badge: <Badge tone="neutral">{formatInteger(events.length)}</Badge> },
+                  { value: "context", label: "Context" },
+                ]}
+                value={activeTab}
+                onValueChange={setActiveTab}
+              />
 
-          <section className="grid gap-6 xl:grid-cols-[minmax(0,1fr)_minmax(320px,0.78fr)]">
-            <Panel
-              eyebrow="Audit"
-              title="Event feed"
-              description="Audit stays session-scoped and read-only here; no current-session live event stream is mounted."
-            >
-              {events.length === 0 ? (
-                <EmptyState
-                  eyebrow="Audit"
-                  title="No audit events returned"
-                  description="This session currently has no stored audit rows for the requested page."
-                  icon={<ShieldIcon className="size-5" />}
-                />
-              ) : (
-                <div className="feed-scroll grid max-h-[420px] gap-3 overflow-auto pr-1">
-                  {events.map((entry) => (
-                    <article
-                      key={entry.id}
-                      className="rounded-[22px] border border-white/8 bg-white/[0.04] p-4"
+              <SectionTabPanel activeValue={activeTab} className="mt-4" value="report">
+                <dl className="grid gap-3">
+                  {getReportMetrics(report).map(([label, value]) => (
+                    <div
+                      key={label}
+                      className="flex items-center justify-between gap-4 rounded-[18px] border border-white/8 bg-[var(--bg-panel-muted)] px-4 py-3 text-sm"
                     >
-                      <div className="flex flex-wrap items-center justify-between gap-3">
-                        <Badge tone={getAuditTone(entry.type)}>
-                          {formatEventType(entry.type)}
-                        </Badge>
-                        <span className="font-['IBM_Plex_Mono'] text-[11px] uppercase tracking-[0.18em] text-slate-500">
-                          {formatDateTimeWithSeconds(entry.timestamp)}
-                        </span>
-                      </div>
-                      <p className="mt-3 text-sm leading-6 text-slate-300">{entry.message}</p>
-                    </article>
+                      <dt className="text-slate-400">{label}</dt>
+                      <dd className="font-medium text-white">{value}</dd>
+                    </div>
                   ))}
-                </div>
-              )}
-            </Panel>
+                  <div className="flex items-center justify-between gap-4 rounded-[18px] border border-white/8 bg-[var(--bg-panel-muted)] px-4 py-3 text-sm">
+                    <dt className="text-slate-400">Symbols traded</dt>
+                    <dd className="font-medium text-white">{formatInteger(report.symbols.length)}</dd>
+                  </div>
+                  <div className="flex items-center justify-between gap-4 rounded-[18px] border border-white/8 bg-[var(--bg-panel-muted)] px-4 py-3 text-sm">
+                    <dt className="text-slate-400">Unrealized PnL</dt>
+                    <dd className="font-medium text-white">
+                      {formatSignedCurrency(report.unrealized_pnl)}
+                    </dd>
+                  </div>
+                </dl>
+              </SectionTabPanel>
 
-            <EmptyState
-              eyebrow="Current-only panels"
-              title="Positions and orders stay on the live dashboard"
-              description="V1 historical session detail deliberately avoids reconstructing current positions or live order grids. Those remain on /dashboard so historical and realtime contexts do not mix."
-              icon={<ShieldIcon className="size-5" />}
-            />
+              <SectionTabPanel activeValue={activeTab} className="mt-4" value="audit">
+                {events.length === 0 ? (
+                  <EmptyState
+                    eyebrow="Audit"
+                    title="No audit events returned"
+                    description="This session currently has no stored audit rows for the requested page."
+                    icon={<ShieldIcon className="size-5" />}
+                  />
+                ) : (
+                  <div className="feed-scroll grid max-h-[420px] gap-3 overflow-auto pr-1">
+                    {events.map((entry) => (
+                      <article
+                        key={entry.id}
+                        className="rounded-[18px] border border-white/8 bg-[var(--bg-panel-muted)] p-4"
+                      >
+                        <div className="flex flex-wrap items-center justify-between gap-3">
+                          <Badge tone={getAuditTone(entry.type)}>
+                            {formatEventType(entry.type)}
+                          </Badge>
+                          <span className="font-['IBM_Plex_Mono'] text-[11px] uppercase tracking-[0.18em] text-slate-500">
+                            {formatDateTimeWithSeconds(entry.timestamp)}
+                          </span>
+                        </div>
+                        <p className="mt-3 text-sm leading-6 text-slate-300">{entry.message}</p>
+                      </article>
+                    ))}
+                  </div>
+                )}
+              </SectionTabPanel>
+
+              <SectionTabPanel activeValue={activeTab} className="mt-4" value="context">
+                <div className="grid gap-3">
+                  <div className="rounded-[18px] border border-white/8 bg-[var(--bg-panel-muted)] p-4">
+                    <div className="flex flex-wrap items-center gap-2">
+                      <Badge tone="neutral">Immutable detail</Badge>
+                      <Badge tone="warning">No SSE</Badge>
+                    </div>
+                    <p className="mt-3 text-sm leading-6 text-slate-400">
+                      Historical detail stays isolated from current-session streaming. Refresh là thao tác thủ công và chỉ áp dụng cho session đang mở.
+                    </p>
+                  </div>
+                  <div className="rounded-[18px] border border-white/8 bg-[var(--bg-panel-muted)] p-4">
+                    <div className="text-sm font-medium text-white">Current-only panels stay on Dashboard</div>
+                    <p className="mt-2 text-sm leading-6 text-slate-400">
+                      Positions và live order grids không được dựng lại ở đây để historical và realtime context không bị trộn.
+                    </p>
+                  </div>
+                </div>
+              </SectionTabPanel>
+            </Panel>
           </section>
         </>
       ) : null}

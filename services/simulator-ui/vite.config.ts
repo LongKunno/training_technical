@@ -1,10 +1,48 @@
 import path from "node:path";
 import react from "@vitejs/plugin-react";
+import type { Plugin } from "vite";
 import { defineConfig, searchForWorkspaceRoot } from "vite";
 
 const srcDir = path.resolve(__dirname, "src");
 const distDir = path.resolve(__dirname, "dist");
 const publicDir = path.resolve(__dirname, "public");
+
+function isBlockedInternalProxyRoute(requestUrl: string) {
+  const requestPath = requestUrl.split("?")[0] ?? "";
+
+  return (
+    requestPath.startsWith("/core/internal/ops") ||
+    requestPath.startsWith("/data/internal/ops") ||
+    ((requestPath === "/bot" || requestPath.startsWith("/bot/")) &&
+      requestPath !== "/bot/health")
+  );
+}
+
+function blockInternalProxyRoutes(): Plugin {
+  return {
+    configureServer(server) {
+      server.middlewares.use((request, response, next) => {
+        const requestUrl = request.url ?? "";
+        if (!isBlockedInternalProxyRoute(requestUrl)) {
+          next();
+          return;
+        }
+
+        response.statusCode = 404;
+        response.setHeader("content-type", "application/json");
+        response.end(
+          JSON.stringify({
+            error: {
+              code: "not_found",
+              message: "Not found",
+            },
+          }),
+        );
+      });
+    },
+    name: "block-internal-proxy-routes",
+  };
+}
 
 const proxyConfig = {
   "/core": {
@@ -21,13 +59,20 @@ const proxyConfig = {
     secure: false,
     rewrite: (requestPath: string) => requestPath.replace(/^\/data/, ""),
   },
+  "^/bot/health$": {
+    target:
+      process.env.SIMULATOR_UI_BOT_PROXY_TARGET ?? "http://bot_runner:8001",
+    changeOrigin: true,
+    secure: false,
+    rewrite: () => "/health",
+  },
 };
 
 export default defineConfig({
   envDir: __dirname,
   publicDir,
   cacheDir: path.resolve(__dirname, "node_modules/.vite"),
-  plugins: [react()],
+  plugins: [blockInternalProxyRoutes(), react()],
   resolve: {
     alias: {
       "@": srcDir,

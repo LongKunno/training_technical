@@ -1,4 +1,5 @@
 import { ApiClientError } from "../../shared/api/http";
+import { formatOperatorErrorMessage } from "../../shared/api/error-messages";
 import type { ExperimentStatus, RunStatus, SessionTimelinePoint } from "../../shared/types";
 
 const dateTimeFormatter = new Intl.DateTimeFormat("en-US", {
@@ -8,6 +9,10 @@ const dateTimeFormatter = new Intl.DateTimeFormat("en-US", {
 
 const integerFormatter = new Intl.NumberFormat("en-US", {
   maximumFractionDigits: 0,
+});
+
+const decimalFormatter = new Intl.NumberFormat("en-US", {
+  maximumFractionDigits: 2,
 });
 
 const currencyFormatter = new Intl.NumberFormat("en-US", {
@@ -32,6 +37,14 @@ export function formatInteger(value: number) {
 
 export function formatCurrency(value?: number | null) {
   return currencyFormatter.format(value ?? 0);
+}
+
+export function formatPercentRatio(value?: number | null) {
+  return `${((value ?? 0) * 100).toFixed(1)}%`;
+}
+
+export function formatBps(value?: number | null) {
+  return `${decimalFormatter.format(value ?? 0)} bps`;
 }
 
 export function formatSignedCurrency(value?: number | null) {
@@ -66,7 +79,7 @@ export function getRunStatusTone(status: RunStatus | ExperimentStatus): BadgeTon
     case "starting":
       return "info";
     case "completed":
-      return "neutral";
+      return "success";
     case "stopped":
       return "warning";
     case "failed":
@@ -104,5 +117,5 @@ export function formatSimulationSchedulerMessage(error: unknown, workflow: "run"
     }
   }
 
-  return error instanceof Error ? error.message : "Request failed.";
+  return formatOperatorErrorMessage(error);
 }

@@ -1,4 +1,4 @@
-.PHONY: up up-ui-dev down down-ui-dev test test-go test-py test-bot-runner lint-go lint-py lint-bot-runner typecheck-ui lint-ui test-ui build-ui test-e2e-ui test-e2e-ui-live test-e2e-ui-restore migrate-up migrate-down smoke-paper smoke-paper-kafka smoke-restore smoke-sim-run smoke-sim-experiment smoke-ui-runtime smoke-ui-dev clean-docker clean-docker-all k8s-kind-up k8s-kind-down k8s-build-images k8s-load-images k8s-lint k8s-template k8s-deploy k8s-redeploy-apps k8s-status k8s-smoke k8s-smoke-restore k8s-hpa-demo-cpu k8s-hpa-demo-memory k8s-rollout-demo k8s-exposure-nodeport-demo k8s-exposure-lb-demo k8s-static-pv-demo
+.PHONY: up up-ui-dev down down-ui-dev test test-go test-py test-bot-runner lint-go lint-py lint-bot-runner typecheck-ui lint-ui test-ui build-ui rebuild-ui-runtime restart-ui-runtime test-e2e-ui test-e2e-ui-live test-e2e-ui-restore migrate-up migrate-down smoke-paper smoke-paper-kafka smoke-restore smoke-sim-run smoke-sim-experiment smoke-ui-runtime smoke-ui-dev clean-docker clean-docker-all k8s-kind-up k8s-kind-down k8s-build-images k8s-load-images k8s-lint k8s-template k8s-deploy k8s-redeploy-apps k8s-status k8s-smoke k8s-smoke-restore k8s-hpa-demo-cpu k8s-hpa-demo-memory k8s-rollout-demo k8s-exposure-nodeport-demo k8s-exposure-lb-demo k8s-static-pv-demo
 
 KIND_CLUSTER_NAME ?= crypto-simulator
 K8S_NAMESPACE ?= crypto-simulator
@@ -28,6 +28,9 @@ K8S_BOT_RUNNER_IMAGE_REPOSITORY ?= crypto-simulator/bot-runner
 K8S_BOT_RUNNER_IMAGE_TAG ?= dev
 K8S_SIMULATOR_UI_IMAGE_REPOSITORY ?= crypto-simulator/simulator-ui
 K8S_SIMULATOR_UI_IMAGE_TAG ?= dev
+SMOKE_ARTIFACT_DIR ?=
+SMOKE_ARTIFACT_PREP = $(if $(SMOKE_ARTIFACT_DIR),mkdir -p $(SMOKE_ARTIFACT_DIR),:)
+SMOKE_ARTIFACT_RUN_ARGS = $(if $(SMOKE_ARTIFACT_DIR),-e SMOKE_ARTIFACT_DIR=/smoke-artifacts -v $(abspath $(SMOKE_ARTIFACT_DIR)):/smoke-artifacts,)
 
 up:
 	docker compose up --build
@@ -79,6 +82,16 @@ test-ui:
 build-ui:
 	docker compose -f docker-compose.yml -f docker-compose.ui-e2e.yml run --build --rm --no-deps ui_e2e_runner sh -lc 'npm run build'
 
+rebuild-ui-runtime:
+	$(MAKE) typecheck-ui
+	$(MAKE) lint-ui
+	$(MAKE) build-ui
+	docker compose build simulator_ui
+	docker compose up -d --no-deps simulator_ui
+
+restart-ui-runtime:
+	docker compose up -d --no-deps simulator_ui
+
 test-e2e-ui:
 	docker compose -f docker-compose.yml -f docker-compose.ui-e2e.yml run --build --rm --no-deps ui_e2e_runner sh -lc 'npm run test:e2e'
 
@@ -111,18 +124,20 @@ smoke-restore:
 
 smoke-sim-run:
 	docker compose up -d --build postgres redis kafka migrations core_trading data_pipeline bot_runner simulator_ui
-	COMPOSE_PROFILES=ops docker compose run --rm --no-deps --entrypoint "sh /scripts/smoke-simulation-run.sh" smoke_runner
+	$(SMOKE_ARTIFACT_PREP)
+	COMPOSE_PROFILES=ops docker compose run --rm --no-deps $(SMOKE_ARTIFACT_RUN_ARGS) --entrypoint "sh /scripts/smoke-simulation-run.sh" smoke_runner
 
 smoke-sim-experiment:
 	docker compose up -d --build postgres redis kafka migrations core_trading data_pipeline bot_runner simulator_ui
-	COMPOSE_PROFILES=ops docker compose run --rm --no-deps --entrypoint "sh /scripts/smoke-simulation-experiment.sh" smoke_runner
+	$(SMOKE_ARTIFACT_PREP)
+	COMPOSE_PROFILES=ops docker compose run --rm --no-deps $(SMOKE_ARTIFACT_RUN_ARGS) --entrypoint "sh /scripts/smoke-simulation-experiment.sh" smoke_runner
 
 smoke-ui-runtime:
-	docker compose up -d --build postgres redis kafka migrations core_trading data_pipeline simulator_ui
+	docker compose up -d --build postgres redis kafka migrations core_trading data_pipeline bot_runner simulator_ui
 	COMPOSE_PROFILES=ops docker compose run --rm --no-deps --entrypoint "sh /scripts/smoke-ui-runtime.sh" smoke_runner
 
 smoke-ui-dev:
-	docker compose -f docker-compose.yml -f docker-compose.ui-dev.yml up -d --build postgres redis kafka migrations core_trading data_pipeline simulator_ui
+	docker compose -f docker-compose.yml -f docker-compose.ui-dev.yml up -d --build postgres redis kafka migrations core_trading data_pipeline bot_runner simulator_ui
 	COMPOSE_PROFILES=ops docker compose -f docker-compose.yml -f docker-compose.ui-dev.yml run --rm --no-deps --entrypoint "sh /scripts/smoke-ui-dev.sh" smoke_runner
 
 clean-docker:

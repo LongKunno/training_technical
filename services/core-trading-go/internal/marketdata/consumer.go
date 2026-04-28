@@ -11,18 +11,29 @@ type PriceTickApplier interface {
 	ApplyMarketPrice(tick PriceTickV1) error
 }
 
+type messageReader interface {
+	FetchMessage(ctx context.Context) (kafka.Message, error)
+	CommitMessages(ctx context.Context, msgs ...kafka.Message) error
+	Close() error
+}
+
 type Consumer struct {
-	reader  *kafka.Reader
+	reader  messageReader
 	applier PriceTickApplier
 }
 
 func NewConsumer(brokers []string, topic string, groupID string, applier PriceTickApplier) *Consumer {
+	reader := kafka.NewReader(kafka.ReaderConfig{
+		Brokers: brokers,
+		GroupID: groupID,
+		Topic:   topic,
+	})
+	return newConsumerWithReader(reader, applier)
+}
+
+func newConsumerWithReader(reader messageReader, applier PriceTickApplier) *Consumer {
 	return &Consumer{
-		reader: kafka.NewReader(kafka.ReaderConfig{
-			Brokers: brokers,
-			GroupID: groupID,
-			Topic:   topic,
-		}),
+		reader:  reader,
 		applier: applier,
 	}
 }

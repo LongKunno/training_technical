@@ -17,6 +17,7 @@ export interface VirtualAccount {
 
 export interface PaperOrder {
   id: string;
+  session_id?: string;
   account_id: string;
   symbol: string;
   side: OrderSide;
@@ -136,6 +137,10 @@ export interface SessionReport {
   rejected_signals: number;
   fees_paid: number;
   slippage_cost: number;
+  fill_ratio?: number;
+  average_slippage_bps?: number;
+  stopped_orders?: number;
+  cancel_rate?: number;
   realized_pnl: number;
   unrealized_pnl: number;
   total_pnl: number;
@@ -161,6 +166,7 @@ export interface SessionHistoryFilter extends QueryParams {
 }
 
 export interface PaperOrderFilter extends QueryParams {
+  session_id?: string | null;
   symbol?: string;
   side?: OrderSide | "";
   limit?: number;

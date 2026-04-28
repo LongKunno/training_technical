@@ -47,6 +47,7 @@ export function normalizePaperOrderFilter(filter: PaperOrderFilter = {}) {
   return {
     limit: filter.limit ?? DEFAULT_ORDERS_LIMIT,
     offset: filter.offset ?? DEFAULT_ORDERS_OFFSET,
+    session_id: normalizeSessionScope(filter.session_id),
     side: filter.side ?? "",
     symbol: filter.symbol?.trim() ?? "",
   };
@@ -178,6 +179,11 @@ export const dataQueryKeys = {
   strategyScenarios: () => ["data", "strategy", "scenarios"] as const,
   strategySignals: (query: StrategySignalsQuery = {}) =>
     ["data", "strategy", "signals", normalizeStrategySignalsQuery(query)] as const,
+};
+
+export const botQueryKeys = {
+  all: () => ["bot"] as const,
+  health: () => ["bot", "health"] as const,
 };
 
 export const simQueryKeys = {

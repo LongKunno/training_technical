@@ -5,6 +5,8 @@ from time import perf_counter, sleep
 from fastapi import APIRouter, HTTPException, Request, status
 from pydantic import BaseModel, Field
 
+from app.core.structured_logging import set_request_log_context
+
 router = APIRouter(prefix="/internal/ops", tags=["ops"])
 
 _MAX_CPU_DURATION_MS = 60_000
@@ -36,6 +38,12 @@ def _ensure_benchmark_access(request: Request) -> None:
 
 @router.post("/benchmark/cpu")
 async def benchmark_cpu(body: CpuBenchmarkRequest, request: Request) -> dict[str, int | str]:
+    set_request_log_context(
+        request,
+        benchmark_duration_ms=body.duration_ms,
+        kind="cpu",
+        outer_loops=body.outer_loops,
+    )
     _ensure_benchmark_access(request)
 
     completed_loops = 0
@@ -57,6 +65,12 @@ async def benchmark_cpu(body: CpuBenchmarkRequest, request: Request) -> dict[str
 
 @router.post("/benchmark/memory")
 async def benchmark_memory(body: MemoryBenchmarkRequest, request: Request) -> dict[str, int | str]:
+    set_request_log_context(
+        request,
+        allocation_mib=body.allocation_mib,
+        benchmark_duration_ms=body.duration_ms,
+        kind="memory",
+    )
     _ensure_benchmark_access(request)
 
     allocation = bytearray(body.allocation_mib * 1024 * 1024)

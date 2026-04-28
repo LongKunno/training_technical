@@ -15,6 +15,13 @@ SCENARIO_METADATA: dict[str, dict[str, object]] = {
             "signal_latency_ticks": 0,
             "spread_bps": 2.5,
             "max_fill_notional_per_tick": 5000,
+            "liquidity_curve": [
+                {"max_notional": 2500, "fill_ratio": 1.0},
+                {"max_notional": 10000, "fill_ratio": 0.75},
+            ],
+            "queue_priority": 0.95,
+            "market_impact_bps_per_10k": 1.5,
+            "cancel_after_ticks": 4,
         },
     },
     "volatility-spike": {
@@ -23,11 +30,18 @@ SCENARIO_METADATA: dict[str, dict[str, object]] = {
             "Fast one-way downside impulse used to verify risk controls "
             "and degraded fill outcomes."
         ),
-        "tags": ["stress", "drawdown", "single-asset"],
+        "tags": ["stress", "drawdown", "single-asset", "volatility-spike"],
         "microstructure_profile": {
             "signal_latency_ticks": 1,
             "spread_bps": 10,
             "max_fill_notional_per_tick": 1200,
+            "liquidity_curve": [
+                {"max_notional": 1200, "fill_ratio": 0.8},
+                {"max_notional": 5000, "fill_ratio": 0.45},
+            ],
+            "queue_priority": 0.7,
+            "market_impact_bps_per_10k": 5.0,
+            "cancel_after_ticks": 3,
         },
     },
     "trend-up": {
@@ -41,6 +55,13 @@ SCENARIO_METADATA: dict[str, dict[str, object]] = {
             "signal_latency_ticks": 0,
             "spread_bps": 3,
             "max_fill_notional_per_tick": 4000,
+            "liquidity_curve": [
+                {"max_notional": 3000, "fill_ratio": 1.0},
+                {"max_notional": 12000, "fill_ratio": 0.8},
+            ],
+            "queue_priority": 0.9,
+            "market_impact_bps_per_10k": 2.0,
+            "cancel_after_ticks": 5,
         },
     },
     "flash-crash-recovery": {
@@ -49,11 +70,18 @@ SCENARIO_METADATA: dict[str, dict[str, object]] = {
             "Sharp crash followed by partial recovery to compare defensive "
             "versus momentum bots."
         ),
-        "tags": ["crash", "recovery", "stress"],
+        "tags": ["crash", "recovery", "stress", "liquidity-thin"],
         "microstructure_profile": {
             "signal_latency_ticks": 2,
             "spread_bps": 18,
             "max_fill_notional_per_tick": 900,
+            "liquidity_curve": [
+                {"max_notional": 900, "fill_ratio": 0.65},
+                {"max_notional": 3500, "fill_ratio": 0.35},
+            ],
+            "queue_priority": 0.55,
+            "market_impact_bps_per_10k": 8.0,
+            "cancel_after_ticks": 2,
         },
     },
     "range-chop": {
@@ -62,11 +90,18 @@ SCENARIO_METADATA: dict[str, dict[str, object]] = {
             "Sideways oscillation scenario for mean-reversion and "
             "moving-average crossover evaluation."
         ),
-        "tags": ["range", "choppy", "benchmark"],
+        "tags": ["range", "chop", "choppy", "benchmark"],
         "microstructure_profile": {
             "signal_latency_ticks": 1,
             "spread_bps": 5,
             "max_fill_notional_per_tick": 2500,
+            "liquidity_curve": [
+                {"max_notional": 2000, "fill_ratio": 0.9},
+                {"max_notional": 8000, "fill_ratio": 0.6},
+            ],
+            "queue_priority": 0.8,
+            "market_impact_bps_per_10k": 3.0,
+            "cancel_after_ticks": 4,
         },
     },
 }
@@ -128,6 +163,10 @@ class MockMarketDataService:
                     "signal_latency_ticks": 0,
                     "spread_bps": 0,
                     "max_fill_notional_per_tick": 0,
+                    "liquidity_curve": [],
+                    "queue_priority": 0,
+                    "market_impact_bps_per_10k": 0,
+                    "cancel_after_ticks": 0,
                 },
             },
         )

@@ -2,6 +2,7 @@ package simulation_test
 
 import (
 	"context"
+	"math"
 	"strings"
 	"testing"
 	"time"
@@ -122,6 +123,155 @@ func TestUpdateRunStatusStopsCurrentSessionOnTerminalStatus(t *testing.T) {
 	}
 }
 
+func TestUpdateRunStatusIgnoresDuplicateTerminalCallbackForStandaloneRun(t *testing.T) {
+	t.Parallel()
+
+	now := time.Date(2026, 4, 20, 10, 0, 0, 0, time.UTC)
+	store := &fakeStore{
+		run: simulation.RunDetail{
+			RunSummary: simulation.RunSummary{
+				RunID:      "sim-run-1",
+				BotID:      "baseline-roundtrip",
+				BotVersion: "v1",
+				ScenarioID: "baseline",
+				SessionID:  "sim-run-1",
+				Status:     simulation.RunStatusRunning,
+				StartedAt:  now,
+				UpdatedAt:  now,
+			},
+			ConfigSnapshot: map[string]any{"trade_notional": 1000.0},
+		},
+	}
+	engine := &fakeEngine{
+		currentSession: papertrading.SimulationSession{
+			ID:     "sim-run-1",
+			Status: papertrading.SessionStatusRunning,
+		},
+	}
+	service := simulation.NewService("paper-account-1", engine, store, &fakeRunner{}, &fakeScenarioClient{})
+
+	completedRun, err := service.UpdateRunStatus(context.Background(), "sim-run-1", simulation.RunStatusUpdate{
+		Status: simulation.RunStatusCompleted,
+	})
+	if err != nil {
+		t.Fatalf("expected first completed callback to succeed, got error: %v", err)
+	}
+	if completedRun.Status != simulation.RunStatusCompleted {
+		t.Fatalf("expected completed run, got %+v", completedRun)
+	}
+	if engine.stopCalls != 1 || store.updatedStatus != simulation.RunStatusCompleted {
+		t.Fatalf("expected first callback to stop and persist once, stopCalls=%d status=%q", engine.stopCalls, store.updatedStatus)
+	}
+	firstCompletedAt := store.completedAt
+	if firstCompletedAt == nil || store.metrics == nil {
+		t.Fatalf("expected first callback to persist terminal metadata, completedAt=%v metrics=%+v", store.completedAt, store.metrics)
+	}
+
+	store.updatedStatus = ""
+	store.completedAt = nil
+	store.metrics = nil
+
+	duplicateRun, err := service.UpdateRunStatus(context.Background(), "sim-run-1", simulation.RunStatusUpdate{
+		Status: simulation.RunStatusCompleted,
+	})
+	if err != nil {
+		t.Fatalf("expected duplicate completed callback to be ignored, got error: %v", err)
+	}
+	if duplicateRun.Status != simulation.RunStatusCompleted {
+		t.Fatalf("expected terminal status to be preserved, got %+v", duplicateRun)
+	}
+	if duplicateRun.CompletedAt == nil || !duplicateRun.CompletedAt.Equal(*firstCompletedAt) {
+		t.Fatalf("expected original completed_at to be preserved, got %+v", duplicateRun)
+	}
+	if store.updatedStatus != "" || store.completedAt != nil || store.metrics != nil {
+		t.Fatalf("expected duplicate callback not to persist again, status=%q completedAt=%v metrics=%+v", store.updatedStatus, store.completedAt, store.metrics)
+	}
+	if engine.stopCalls != 1 {
+		t.Fatalf("expected duplicate callback not to stop session again, got %d", engine.stopCalls)
+	}
+}
+
+func TestStopRunPersistsOperatorStopAndIgnoresLateCompletedCallback(t *testing.T) {
+	t.Parallel()
+
+	now := time.Date(2026, 4, 20, 10, 0, 0, 0, time.UTC)
+	store := &fakeStore{
+		run: simulation.RunDetail{
+			RunSummary: simulation.RunSummary{
+				RunID:      "sim-run-1",
+				BotID:      "buy-and-hold",
+				BotVersion: "v1",
+				ScenarioID: "trend-up",
+				SessionID:  "sim-run-1",
+				Status:     simulation.RunStatusRunning,
+				StartedAt:  now,
+				UpdatedAt:  now,
+			},
+			ConfigSnapshot: map[string]any{"trade_notional": 1000.0},
+		},
+	}
+	engine := &fakeEngine{
+		currentSession: papertrading.SimulationSession{
+			ID:     "sim-run-1",
+			Status: papertrading.SessionStatusRunning,
+		},
+	}
+	runner := &fakeRunner{}
+	service := simulation.NewService("paper-account-1", engine, store, runner, &fakeScenarioClient{})
+
+	stoppedRun, err := service.StopRun(context.Background(), "sim-run-1")
+	if err != nil {
+		t.Fatalf("expected stop run to succeed, got error: %v", err)
+	}
+	if stoppedRun.Status != simulation.RunStatusStopped || stoppedRun.StoppedReason != "operator_stop" {
+		t.Fatalf("expected operator stop to persist terminal state, got %+v", stoppedRun)
+	}
+	if stoppedRun.CompletedAt == nil {
+		t.Fatalf("expected operator stop to persist completed_at, got %+v", stoppedRun)
+	}
+	if stoppedRun.MetricsSnapshot == nil || stoppedRun.MetricsSnapshot.TotalPnL != 75 {
+		t.Fatalf("expected operator stop to persist metrics snapshot, got %+v", stoppedRun.MetricsSnapshot)
+	}
+	if engine.stopCalls != 1 {
+		t.Fatalf("expected operator stop to stop session once, got %d", engine.stopCalls)
+	}
+	if engine.currentSession.Status != papertrading.SessionStatusStopped {
+		t.Fatalf("expected operator stop to stop child session, got %+v", engine.currentSession)
+	}
+	if len(runner.stopRunIDs) != 1 || runner.stopRunIDs[0] != "sim-run-1" {
+		t.Fatalf("expected operator stop to notify runner once, got %+v", runner.stopRunIDs)
+	}
+	if store.updatedStatus != simulation.RunStatusStopped || store.lastStoppedReason != "operator_stop" || store.completedAt == nil {
+		t.Fatalf("expected stopped status/reason/completed_at to persist, status=%q reason=%q completedAt=%v", store.updatedStatus, store.lastStoppedReason, store.completedAt)
+	}
+	if store.metrics == nil || store.metrics.TotalPnL != 75 {
+		t.Fatalf("expected stopped metrics to persist, got %+v", store.metrics)
+	}
+
+	store.updatedStatus = ""
+	store.lastStoppedReason = ""
+	store.lastErrorMessage = ""
+	store.completedAt = nil
+	store.metrics = nil
+
+	lateRun, err := service.UpdateRunStatus(context.Background(), "sim-run-1", simulation.RunStatusUpdate{
+		Status: simulation.RunStatusCompleted,
+	})
+	if err != nil {
+		t.Fatalf("expected late completed callback to be ignored, got error: %v", err)
+	}
+
+	if lateRun.Status != simulation.RunStatusStopped || lateRun.StoppedReason != "operator_stop" {
+		t.Fatalf("expected stopped state to be preserved, got %+v", lateRun)
+	}
+	if store.updatedStatus != "" || store.completedAt != nil || store.metrics != nil {
+		t.Fatalf("expected late callback not to persist a new status update, got status=%q completedAt=%v metrics=%+v", store.updatedStatus, store.completedAt, store.metrics)
+	}
+	if engine.stopCalls != 1 {
+		t.Fatalf("expected late callback not to stop session again, got %d", engine.stopCalls)
+	}
+}
+
 func TestCreateRunUsesExecutionProfileOverridesAndLegacyConfigAlias(t *testing.T) {
 	t.Parallel()
 
@@ -197,6 +347,69 @@ func TestCreateRunUsesExecutionProfileOverridesAndLegacyConfigAlias(t *testing.T
 	}
 	if len(engine.lastProfile.Rules.RiskControls.AllowedSymbols) != 2 {
 		t.Fatalf("expected engine risk controls to be copied, got %+v", engine.lastProfile.Rules.RiskControls)
+	}
+	if engine.lastProfile.MarketProfile.MarketImpactBpsPer10k != 2 {
+		t.Fatalf("expected engine to receive market impact profile, got %+v", engine.lastProfile.MarketProfile)
+	}
+	if len(run.MarketProfileSnapshot.LiquidityCurve) != 1 {
+		t.Fatalf("expected liquidity curve snapshot, got %+v", run.MarketProfileSnapshot)
+	}
+}
+
+func TestCreateRunPrefersBotConfigOverLegacyConfigAlias(t *testing.T) {
+	t.Parallel()
+
+	store := &fakeStore{
+		bot: simulation.BotDetail{
+			BotSummary: simulation.BotSummary{
+				BotID:           "buy-and-hold",
+				Name:            "Buy And Hold",
+				CurrentVersion:  "v1",
+				DefaultScenario: "trend-up",
+			},
+			Versions: []simulation.BotVersion{
+				{
+					BotID:   "buy-and-hold",
+					Version: "v1",
+					DefaultConfig: map[string]any{
+						"trade_notional":   1000.0,
+						"tick_interval_ms": 250.0,
+					},
+				},
+			},
+		},
+	}
+	engine := &fakeEngine{}
+	runner := &fakeRunner{}
+	service := simulation.NewService("paper-account-1", engine, store, runner, &fakeScenarioClient{})
+
+	run, err := service.CreateRun(context.Background(), simulation.CreateRunRequest{
+		BotID:      "buy-and-hold",
+		ScenarioID: "trend-up",
+		Config: map[string]any{
+			"trade_notional": 750.0,
+			"legacy_only":    true,
+		},
+		BotConfig: map[string]any{
+			"trade_notional": 500.0,
+			"bot_config":     true,
+		},
+	})
+	if err != nil {
+		t.Fatalf("expected create run to succeed, got error: %v", err)
+	}
+
+	if got := run.ConfigSnapshot["trade_notional"]; got != 500.0 {
+		t.Fatalf("expected bot_config to win over legacy config, got %+v", run.ConfigSnapshot)
+	}
+	if got := run.ConfigSnapshot["bot_config"]; got != true {
+		t.Fatalf("expected bot_config-only key to be persisted, got %+v", run.ConfigSnapshot)
+	}
+	if _, found := run.ConfigSnapshot["legacy_only"]; found {
+		t.Fatalf("expected legacy config alias to be ignored when bot_config is present, got %+v", run.ConfigSnapshot)
+	}
+	if got := runner.startRequest.Config["trade_notional"]; got != 500.0 {
+		t.Fatalf("expected runner to receive bot_config value, got %+v", runner.startRequest.Config)
 	}
 }
 
@@ -437,6 +650,167 @@ func TestExperimentAdvancesSequentiallyAcrossChildRuns(t *testing.T) {
 	}
 }
 
+func TestExperimentSummaryAggregatesRunnerFailureInjection(t *testing.T) {
+	t.Parallel()
+
+	store := &fakeStore{
+		bots: map[string]simulation.BotDetail{
+			"moving-average-cross": makeBotDetail("moving-average-cross", "Moving Average Cross", "range-chop", map[string]any{
+				"trade_notional": 1000.0,
+				"fast_window":    2.0,
+				"slow_window":    3.0,
+			}),
+		},
+	}
+	engine := &fakeEngine{}
+	runner := &fakeRunner{}
+	service := simulation.NewService("paper-account-1", engine, store, runner, &fakeScenarioClient{})
+
+	experiment, err := service.CreateExperiment(context.Background(), simulation.CreateExperimentRequest{
+		Name: "Runner failure lane",
+		Bots: []simulation.ExperimentBotRequest{
+			{
+				BotID: "moving-average-cross",
+				BotConfig: map[string]any{
+					"fast_window": 3.0,
+					"slow_window": 3.0,
+				},
+			},
+		},
+		Scenarios:   []string{"range-chop"},
+		Repetitions: 2,
+	})
+	if err != nil {
+		t.Fatalf("expected create experiment to succeed, got error: %v", err)
+	}
+
+	firstRunID := experiment.ActiveRunID
+	failedRun, err := service.UpdateRunStatus(context.Background(), firstRunID, simulation.RunStatusUpdate{
+		Status:       simulation.RunStatusFailed,
+		ErrorMessage: "invalid moving-average config",
+	})
+	if err != nil {
+		t.Fatalf("expected runner failure callback to succeed, got error: %v", err)
+	}
+
+	if failedRun.Status != simulation.RunStatusFailed {
+		t.Fatalf("expected failed child run, got %+v", failedRun)
+	}
+	if failedRun.ErrorMessage != "invalid moving-average config" || failedRun.StoppedReason != "runner_failure" {
+		t.Fatalf("expected runner failure reason to persist, got %+v", failedRun)
+	}
+	if store.experiment.FailedRuns != 1 || store.experiment.CurrentIndex != 1 {
+		t.Fatalf("expected experiment to account for failed child, got %+v", store.experiment)
+	}
+	if store.createRunCalls != 2 || store.experiment.ActiveRunID == "" || store.experiment.ActiveRunID == firstRunID {
+		t.Fatalf("expected experiment to start second child after failure, calls=%d experiment=%+v", store.createRunCalls, store.experiment)
+	}
+
+	secondRunID := store.experiment.ActiveRunID
+	if _, err := service.UpdateRunStatus(context.Background(), secondRunID, simulation.RunStatusUpdate{
+		Status: simulation.RunStatusCompleted,
+	}); err != nil {
+		t.Fatalf("expected second child completion to succeed, got error: %v", err)
+	}
+
+	if store.experiment.Status != simulation.ExperimentStatusCompleted {
+		t.Fatalf("expected experiment to complete after second child, got %+v", store.experiment)
+	}
+	if store.experiment.CompletedRuns != 1 || store.experiment.FailedRuns != 1 {
+		t.Fatalf("expected one completed and one failed child, got %+v", store.experiment)
+	}
+
+	rows, err := service.GetExperimentSummary(experiment.ExperimentID)
+	if err != nil {
+		t.Fatalf("expected experiment summary to succeed, got error: %v", err)
+	}
+	if len(rows) != 1 {
+		t.Fatalf("expected one aggregate lane, got %+v", rows)
+	}
+	if rows[0].ScheduledRuns != 2 || rows[0].CompletedRuns != 1 || rows[0].FailedRuns != 1 || rows[0].StoppedRuns != 0 {
+		t.Fatalf("expected failed lane to aggregate with completed run, got %+v", rows[0])
+	}
+	if rows[0].AvgTotalPnL != 75 || rows[0].BestTotalPnL != 75 || rows[0].WorstTotalPnL != 75 || rows[0].AvgMaxDrawdown != 10 {
+		t.Fatalf("expected completed-only metrics aggregate, got %+v", rows[0])
+	}
+}
+
+func TestQueuedExperimentStartsAfterActiveExperimentCompletes(t *testing.T) {
+	t.Parallel()
+
+	store := &fakeStore{
+		bots: map[string]simulation.BotDetail{
+			"baseline-roundtrip": makeBotDetail("baseline-roundtrip", "Baseline Roundtrip", "baseline", map[string]any{
+				"trade_notional": 1000.0,
+			}),
+		},
+	}
+	engine := &fakeEngine{}
+	runner := &fakeRunner{}
+	service := simulation.NewService("paper-account-1", engine, store, runner, &fakeScenarioClient{})
+
+	activeExperiment, err := service.CreateExperiment(context.Background(), simulation.CreateExperimentRequest{
+		Name:        "Active first",
+		Bots:        []simulation.ExperimentBotRequest{{BotID: "baseline-roundtrip"}},
+		Scenarios:   []string{"baseline"},
+		Repetitions: 1,
+	})
+	if err != nil {
+		t.Fatalf("expected active experiment creation to succeed, got error: %v", err)
+	}
+	if activeExperiment.Status != simulation.ExperimentStatusRunning || activeExperiment.ActiveRunID == "" {
+		t.Fatalf("expected first experiment to start immediately, got %+v", activeExperiment)
+	}
+
+	queuedExperiment, err := service.CreateExperiment(context.Background(), simulation.CreateExperimentRequest{
+		Name:        "Queued second",
+		Bots:        []simulation.ExperimentBotRequest{{BotID: "baseline-roundtrip"}},
+		Scenarios:   []string{"range-chop"},
+		Repetitions: 1,
+	})
+	if err != nil {
+		t.Fatalf("expected queued experiment creation to succeed, got error: %v", err)
+	}
+	if queuedExperiment.Status != simulation.ExperimentStatusQueued || queuedExperiment.QueuePosition != 1 {
+		t.Fatalf("expected second experiment to queue behind active one, got %+v", queuedExperiment)
+	}
+	if store.createRunCalls != 1 {
+		t.Fatalf("expected queued experiment not to start a child yet, got %d create calls", store.createRunCalls)
+	}
+
+	_, err = service.UpdateRunStatus(context.Background(), activeExperiment.ActiveRunID, simulation.RunStatusUpdate{
+		Status: simulation.RunStatusCompleted,
+	})
+	if err != nil {
+		t.Fatalf("expected active experiment child completion to promote queue, got error: %v", err)
+	}
+
+	firstDetail, err := service.GetExperiment(activeExperiment.ExperimentID)
+	if err != nil {
+		t.Fatalf("expected first experiment detail, got error: %v", err)
+	}
+	if firstDetail.Status != simulation.ExperimentStatusCompleted || firstDetail.CompletedRuns != 1 {
+		t.Fatalf("expected first experiment completed, got %+v", firstDetail)
+	}
+
+	secondDetail, err := service.GetExperiment(queuedExperiment.ExperimentID)
+	if err != nil {
+		t.Fatalf("expected second experiment detail, got error: %v", err)
+	}
+	if secondDetail.Status != simulation.ExperimentStatusRunning || secondDetail.ActiveRunID == "" {
+		t.Fatalf("expected queued experiment to start after first completes, got %+v", secondDetail)
+	}
+	if secondDetail.QueuePosition != 0 {
+		t.Fatalf("expected promoted experiment to leave queue, got %+v", secondDetail)
+	}
+	if store.createRunCalls != 2 {
+		t.Fatalf("expected exactly one child per experiment so far, got %d create calls", store.createRunCalls)
+	}
+	if len(runner.startRequests) != 2 || runner.startRequests[1].ScenarioID != "range-chop" {
+		t.Fatalf("expected runner to start queued range-chop child, got %+v", runner.startRequests)
+	}
+}
+
 func TestUpdateRunStatusIgnoresDuplicateTerminalCallbackForExperimentChild(t *testing.T) {
 	t.Parallel()
 
@@ -548,6 +922,21 @@ func TestStopExperimentStopsActiveChildAndMarksExperimentStopped(t *testing.T) {
 	}
 	if stoppedExperiment.CompletedAt == nil {
 		t.Fatalf("expected terminal timestamp after stop, got %+v", stoppedExperiment)
+	}
+	if engine.stopCalls != 1 {
+		t.Fatalf("expected stop experiment to stop active paper session, got %d calls", engine.stopCalls)
+	}
+	if store.createdRun.Status != simulation.RunStatusStopped {
+		t.Fatalf("expected active child run to be marked stopped, got %+v", store.createdRun)
+	}
+	if store.createdRun.StoppedReason != "operator_stop" {
+		t.Fatalf("expected child stopped reason operator_stop, got %+v", store.createdRun)
+	}
+	if store.createdRun.CompletedAt == nil {
+		t.Fatalf("expected child terminal timestamp after experiment stop, got %+v", store.createdRun)
+	}
+	if store.createdRun.MetricsSnapshot == nil || store.createdRun.MetricsSnapshot.TotalPnL != 75 {
+		t.Fatalf("expected child metrics snapshot after experiment stop, got %+v", store.createdRun.MetricsSnapshot)
 	}
 }
 
@@ -850,14 +1239,99 @@ func TestReconcileFailsStaleRunAsRunnerLost(t *testing.T) {
 	if store.run.Status != simulation.RunStatusFailed {
 		t.Fatalf("expected stale run to be marked failed, got %+v", store.run)
 	}
-	if store.lastStoppedReason != "runner_lost" {
-		t.Fatalf("expected runner_lost stop reason, got %q", store.lastStoppedReason)
+	if store.run.StoppedReason != "runner_lost" {
+		t.Fatalf("expected runner_lost stop reason, got %+v", store.run)
 	}
 	if store.metrics == nil || store.metrics.TotalPnL != 75 {
 		t.Fatalf("expected reconcile to persist report metrics, got %+v", store.metrics)
 	}
 	if engine.stopCalls != 1 {
 		t.Fatalf("expected stale run reconcile to stop the in-memory session, got %d", engine.stopCalls)
+	}
+}
+
+func TestReconcileStaleExperimentChildAdvancesToNextSlot(t *testing.T) {
+	t.Parallel()
+
+	staleAt := time.Now().UTC().Add(-2 * time.Minute)
+	store := &fakeStore{
+		bots: map[string]simulation.BotDetail{
+			"baseline-roundtrip": makeBotDetail("baseline-roundtrip", "Baseline Roundtrip", "baseline", map[string]any{
+				"trade_notional": 1000.0,
+			}),
+		},
+		experiment: simulation.ExperimentDetail{
+			ExperimentSummary: simulation.ExperimentSummary{
+				ExperimentID:  "sim-exp-stale-child",
+				Name:          "Stale child batch",
+				Status:        simulation.ExperimentStatusRunning,
+				PlannedRuns:   2,
+				ActiveRunID:   "sim-run-stale-child",
+				CompletedRuns: 0,
+				FailedRuns:    0,
+				CreatedAt:     staleAt,
+				StartedAt:     &staleAt,
+				UpdatedAt:     staleAt,
+			},
+			ExecutionProfileSnapshot: simulation.ExecutionProfile{
+				InitialBalance: 10000,
+			},
+			Slots: []simulation.ExperimentRunSlot{
+				{SlotIndex: 0, BotID: "baseline-roundtrip", BotName: "Baseline Roundtrip", BotVersion: "v1", ScenarioID: "baseline", ConfigSnapshot: map[string]any{"trade_notional": 1000.0}},
+				{SlotIndex: 1, BotID: "baseline-roundtrip", BotName: "Baseline Roundtrip", BotVersion: "v1", ScenarioID: "range-chop", ConfigSnapshot: map[string]any{"trade_notional": 1000.0}},
+			},
+		},
+		runs: []simulation.RunDetail{
+			{
+				RunSummary: simulation.RunSummary{
+					RunID:           "sim-run-stale-child",
+					ExperimentID:    "sim-exp-stale-child",
+					BotID:           "baseline-roundtrip",
+					BotName:         "Baseline Roundtrip",
+					BotVersion:      "v1",
+					ScenarioID:      "baseline",
+					SessionID:       "sim-run-stale-child",
+					Status:          simulation.RunStatusRunning,
+					LastHeartbeatAt: &staleAt,
+					StartedAt:       staleAt,
+					UpdatedAt:       staleAt,
+				},
+			},
+		},
+	}
+	engine := &fakeEngine{
+		currentSession: papertrading.SimulationSession{
+			ID:     "sim-run-stale-child",
+			Status: papertrading.SessionStatusRunning,
+		},
+	}
+	runner := &fakeRunner{}
+	service := simulation.NewService("paper-account-1", engine, store, runner, &fakeScenarioClient{})
+
+	if err := service.Reconcile(context.Background()); err != nil {
+		t.Fatalf("expected stale child reconcile to continue experiment, got error: %v", err)
+	}
+
+	if store.runs[0].Status != simulation.RunStatusFailed {
+		t.Fatalf("expected stale child to be marked failed, got %+v", store.runs[0])
+	}
+	if store.runs[0].StoppedReason != "runner_lost" {
+		t.Fatalf("expected runner_lost stop reason on stale child, got %+v", store.runs[0])
+	}
+	if engine.stopCalls != 1 {
+		t.Fatalf("expected stale child reconcile to stop the active session, got %d", engine.stopCalls)
+	}
+	if store.experiment.FailedRuns != 1 || store.experiment.CurrentIndex != 1 {
+		t.Fatalf("expected experiment to advance after stale child failure, got %+v", store.experiment)
+	}
+	if store.experiment.Status != simulation.ExperimentStatusRunning {
+		t.Fatalf("expected experiment to keep running on next slot, got %+v", store.experiment)
+	}
+	if store.createRunCalls != 1 || store.experiment.ActiveRunID == "" || store.experiment.ActiveRunID == "sim-run-stale-child" {
+		t.Fatalf("expected next child run to start after stale child failure, calls=%d experiment=%+v", store.createRunCalls, store.experiment)
+	}
+	if len(runner.startRequests) != 1 || runner.startRequests[0].ScenarioID != "range-chop" {
+		t.Fatalf("expected runner to start next range-chop child, got %+v", runner.startRequests)
 	}
 }
 
@@ -1023,7 +1497,13 @@ func TestGetExperimentSummaryAggregatesByLane(t *testing.T) {
 					StartedAt:    startedAt,
 					UpdatedAt:    startedAt,
 				},
-				MetricsSnapshot: &simulation.RunMetricsSummary{TotalPnL: 100, MaxDrawdown: 10},
+				MetricsSnapshot: &simulation.RunMetricsSummary{
+					TotalPnL:           100,
+					MaxDrawdown:        10,
+					FillRatio:          0.75,
+					AverageSlippageBps: 4,
+					CancelRate:         0.25,
+				},
 			},
 			{
 				RunSummary: simulation.RunSummary{
@@ -1038,7 +1518,13 @@ func TestGetExperimentSummaryAggregatesByLane(t *testing.T) {
 					StartedAt:    startedAt.Add(time.Minute),
 					UpdatedAt:    startedAt.Add(time.Minute),
 				},
-				MetricsSnapshot: &simulation.RunMetricsSummary{TotalPnL: 40, MaxDrawdown: 30},
+				MetricsSnapshot: &simulation.RunMetricsSummary{
+					TotalPnL:           40,
+					MaxDrawdown:        30,
+					FillRatio:          0.25,
+					AverageSlippageBps: 8,
+					CancelRate:         0.75,
+				},
 			},
 			{
 				RunSummary: simulation.RunSummary{
@@ -1090,6 +1576,14 @@ func TestGetExperimentSummaryAggregatesByLane(t *testing.T) {
 	if rows[0].AvgTotalPnL != 70 || rows[0].BestTotalPnL != 100 || rows[0].WorstTotalPnL != 40 || rows[0].AvgMaxDrawdown != 20 {
 		t.Fatalf("unexpected baseline aggregates %+v", rows[0])
 	}
+	expectedStdDev := math.Sqrt(1800)
+	expectedCI95 := 1.96 * expectedStdDev / math.Sqrt(2)
+	if math.Abs(rows[0].StdDevTotalPnL-expectedStdDev) > 0.000001 || math.Abs(rows[0].CI95TotalPnL-expectedCI95) > 0.000001 {
+		t.Fatalf("unexpected baseline confidence stats %+v", rows[0])
+	}
+	if rows[0].AvgFillRatio != 0.5 || rows[0].AvgSlippageBps != 6 || rows[0].AvgCancelRate != 0.5 || rows[0].FailureRate != 0 {
+		t.Fatalf("unexpected baseline quality aggregates %+v", rows[0])
+	}
 
 	if rows[1].BotID != "buy-and-hold" || rows[1].ScenarioID != "range-chop" {
 		t.Fatalf("expected range row second, got %+v", rows[1])
@@ -1099,6 +1593,12 @@ func TestGetExperimentSummaryAggregatesByLane(t *testing.T) {
 	}
 	if rows[1].AvgTotalPnL != 0 || rows[1].BestTotalPnL != 0 || rows[1].WorstTotalPnL != 0 || rows[1].AvgMaxDrawdown != 0 {
 		t.Fatalf("expected zeroed aggregates without completed runs, got %+v", rows[1])
+	}
+	if rows[1].StdDevTotalPnL != 0 || rows[1].CI95TotalPnL != 0 {
+		t.Fatalf("expected zeroed confidence stats without completed runs, got %+v", rows[1])
+	}
+	if rows[1].FailureRate != 0.5 || rows[1].AvgFillRatio != 0 || rows[1].AvgCancelRate != 0 {
+		t.Fatalf("expected terminal failure rate without completed quality metrics, got %+v", rows[1])
 	}
 }
 
@@ -1172,6 +1672,8 @@ type fakeStore struct {
 	run                   simulation.RunDetail
 	leaderboard           []simulation.LeaderboardEntry
 	experiment            simulation.ExperimentDetail
+	experiments           map[string]simulation.ExperimentDetail
+	experimentOrder       []string
 	createdRun            simulation.RunDetail
 	createdRuns           []simulation.RunDetail
 	createRunCalls        int
@@ -1293,17 +1795,23 @@ func (f *fakeStore) UpdateRunStatus(_ string, runID string, status simulation.Ru
 	f.metrics = metrics
 	if f.run.RunID == runID {
 		f.run.Status = status
+		f.run.ErrorMessage = strings.TrimSpace(errorMessage)
+		f.run.StoppedReason = strings.TrimSpace(stoppedReason)
 		f.run.CompletedAt = completedAt
 		f.run.MetricsSnapshot = metrics
 	}
 	if f.createdRun.RunID == runID {
 		f.createdRun.Status = status
+		f.createdRun.ErrorMessage = strings.TrimSpace(errorMessage)
+		f.createdRun.StoppedReason = strings.TrimSpace(stoppedReason)
 		f.createdRun.CompletedAt = completedAt
 		f.createdRun.MetricsSnapshot = metrics
 	}
 	for index := range f.createdRuns {
 		if f.createdRuns[index].RunID == runID {
 			f.createdRuns[index].Status = status
+			f.createdRuns[index].ErrorMessage = strings.TrimSpace(errorMessage)
+			f.createdRuns[index].StoppedReason = strings.TrimSpace(stoppedReason)
 			f.createdRuns[index].CompletedAt = completedAt
 			f.createdRuns[index].MetricsSnapshot = metrics
 		}
@@ -1311,6 +1819,8 @@ func (f *fakeStore) UpdateRunStatus(_ string, runID string, status simulation.Ru
 	for index := range f.runs {
 		if f.runs[index].RunID == runID {
 			f.runs[index].Status = status
+			f.runs[index].ErrorMessage = strings.TrimSpace(errorMessage)
+			f.runs[index].StoppedReason = strings.TrimSpace(stoppedReason)
 			f.runs[index].CompletedAt = completedAt
 			f.runs[index].MetricsSnapshot = metrics
 		}
@@ -1340,20 +1850,33 @@ func (f *fakeStore) UpdateRunHeartbeat(_ string, runID string, heartbeatAt time.
 
 func (f *fakeStore) ListExperiments(_ string, filter simulation.ExperimentFilter) ([]simulation.ExperimentSummary, error) {
 	f.lastExperimentFilter = filter
-	if f.experiment.ExperimentID == "" {
+	experiments := f.allExperiments()
+	if len(experiments) == 0 {
 		return nil, nil
 	}
-	return []simulation.ExperimentSummary{f.experiment.ExperimentSummary}, nil
+	summaries := make([]simulation.ExperimentSummary, 0, len(experiments))
+	for _, experiment := range experiments {
+		summaries = append(summaries, experiment.ExperimentSummary)
+	}
+	return summaries, nil
 }
 
 func (f *fakeStore) ListQueuedExperiments(_ string) ([]simulation.ExperimentSummary, error) {
-	if f.experiment.ExperimentID != "" && f.experiment.Status == simulation.ExperimentStatusQueued {
-		return []simulation.ExperimentSummary{f.experiment.ExperimentSummary}, nil
+	experiments := f.allExperiments()
+	queued := make([]simulation.ExperimentSummary, 0)
+	for _, experiment := range experiments {
+		if experiment.Status == simulation.ExperimentStatusQueued {
+			queued = append(queued, experiment.ExperimentSummary)
+		}
 	}
-	return nil, nil
+	return queued, nil
 }
 
 func (f *fakeStore) GetExperiment(_ string, experimentID string) (simulation.ExperimentDetail, bool, error) {
+	if f.experiments != nil {
+		experiment, found := f.experiments[experimentID]
+		return experiment, found, nil
+	}
 	if f.experiment.ExperimentID == experimentID {
 		return f.experiment, true, nil
 	}
@@ -1361,20 +1884,62 @@ func (f *fakeStore) GetExperiment(_ string, experimentID string) (simulation.Exp
 }
 
 func (f *fakeStore) FindActiveExperiment(_ string) (simulation.ExperimentDetail, bool, error) {
-	if f.experiment.ExperimentID != "" && (f.experiment.Status == simulation.ExperimentStatusStarting || f.experiment.Status == simulation.ExperimentStatusRunning) {
-		return f.experiment, true, nil
+	for _, experiment := range f.allExperiments() {
+		if experiment.Status == simulation.ExperimentStatusStarting || experiment.Status == simulation.ExperimentStatusRunning {
+			return experiment, true, nil
+		}
 	}
 	return simulation.ExperimentDetail{}, false, nil
 }
 
 func (f *fakeStore) CreateExperiment(_ string, experiment simulation.ExperimentDetail) error {
+	if f.experiments == nil {
+		f.experiments = make(map[string]simulation.ExperimentDetail)
+	}
+	if _, found := f.experiments[experiment.ExperimentID]; !found {
+		f.experimentOrder = append(f.experimentOrder, experiment.ExperimentID)
+	}
+	f.experiments[experiment.ExperimentID] = experiment
 	f.experiment = experiment
 	return nil
 }
 
 func (f *fakeStore) UpdateExperiment(_ string, experiment simulation.ExperimentDetail) error {
+	if f.experiments != nil {
+		if _, found := f.experiments[experiment.ExperimentID]; !found {
+			f.experimentOrder = append(f.experimentOrder, experiment.ExperimentID)
+		}
+		f.experiments[experiment.ExperimentID] = experiment
+	}
 	f.experiment = experiment
 	return nil
+}
+
+func (f *fakeStore) allExperiments() []simulation.ExperimentDetail {
+	if f.experiments == nil {
+		if f.experiment.ExperimentID == "" {
+			return nil
+		}
+		return []simulation.ExperimentDetail{f.experiment}
+	}
+
+	experiments := make([]simulation.ExperimentDetail, 0, len(f.experiments))
+	seen := make(map[string]struct{}, len(f.experiments))
+	for _, experimentID := range f.experimentOrder {
+		experiment, found := f.experiments[experimentID]
+		if !found {
+			continue
+		}
+		experiments = append(experiments, experiment)
+		seen[experimentID] = struct{}{}
+	}
+	for experimentID, experiment := range f.experiments {
+		if _, found := seen[experimentID]; found {
+			continue
+		}
+		experiments = append(experiments, experiment)
+	}
+	return experiments
 }
 
 type fakeRunner struct {
@@ -1414,6 +1979,12 @@ func (f *fakeScenarioClient) GetScenario(_ context.Context, scenarioID string) (
 			SignalLatencyTicks:     1,
 			SpreadBps:              5,
 			MaxFillNotionalPerTick: 2500,
+			LiquidityCurve: []simulation.LiquidityCurvePoint{
+				{MaxNotional: 2500, FillRatio: 0.75},
+			},
+			QueuePriority:         0.9,
+			MarketImpactBpsPer10k: 2,
+			CancelAfterTicks:      4,
 		},
 	}, nil
 }
@@ -1444,6 +2015,12 @@ func makeScenario(scenarioID string, latencyTicks int, spreadBps float64, maxFil
 			SignalLatencyTicks:     latencyTicks,
 			SpreadBps:              spreadBps,
 			MaxFillNotionalPerTick: maxFillNotional,
+			LiquidityCurve: []simulation.LiquidityCurvePoint{
+				{MaxNotional: maxFillNotional, FillRatio: 0.8},
+			},
+			QueuePriority:         0.85,
+			MarketImpactBpsPer10k: 2.5,
+			CancelAfterTicks:      4,
 		},
 	}
 }

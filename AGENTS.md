@@ -8,7 +8,7 @@ This repo is a small microservice stack:
 - `services/data-pipeline-py`: Python mock market/strategy data service. Runtime code is under `app/`; tests live in `tests/`; JSON fixtures are in `app/fixtures/`.
 - `services/simulator-ui`: React + Vite + TypeScript operator UI. Routes are in `src/app/routes`; feature code is in `src/features/*`; shared API, state, UI, and chart helpers are in `src/shared/*`.
 - `scripts/`: Docker smoke scripts such as `smoke-paper-trading.sh` and restore/Kafka variants.
-- `docs/` and `README.md`: architecture, progress, and operating notes.
+- `_bmad-output/` and `README.md`: architecture, progress, operating notes, and shared BMad project knowledge. Do not recreate `docs/`.
 
 ## Build, Test, and Development Commands
 
@@ -38,7 +38,7 @@ This repo is a small microservice stack:
 - Follow the existing commit style: short prefixes such as `feat: ...`, `ci: ...`, `checkpoint: ...`.
 - Keep subjects imperative and scoped to one logical change.
 - PRs should include: purpose, affected services, verification commands run, and screenshots for UI-visible changes.
-- If API contracts, ports, or workflows change, update `README.md` and `docs/progress-tracker.md` in the same PR.
+- If API contracts, ports, or workflows change, update `README.md` and the relevant `_bmad-output/` artifact in the same PR.
 
 ## Security & Configuration Tips
 

@@ -95,7 +95,7 @@ func NewEngineFromPersistentState(state PersistentState, defaultProfile SessionE
 		account:              cloneAccount(state.Account),
 		defaultBalance:       defaultProfile.InitialBalance,
 		initialBalance:       state.InitialBalance,
-		orderCounter:         deriveOrderCounter(state.Orders),
+		orderCounter:         deriveOrderCounter(state.Orders, state.PendingExecutions),
 		orders:               cloneOrders(state.Orders),
 		lastTradePrices:      deriveLastTradePrices(state.Orders),
 		markPrices:           cloneMarketPrices(state.MarketPrices),
@@ -163,11 +163,16 @@ func (e *Engine) PlaceMarketOrder(request PlaceOrderRequest) (PaperOrder, error)
 		"source": "paper-order-api",
 	})
 	if err != nil {
-		e.appendAuditLocked("order_rejected", err.Error(), request.Symbol, time.Now().UTC(), map[string]any{
+		details := map[string]any{
 			"side":     request.Side,
 			"quantity": request.Quantity,
 			"price":    request.Price,
-		})
+			"reason":   err.Error(),
+		}
+		if riskControl := riskRejectReason(err); riskControl != "" {
+			details["risk_control"] = riskControl
+		}
+		e.appendAuditLocked("order_rejected", err.Error(), request.Symbol, time.Now().UTC(), details)
 		return PaperOrder{}, err
 	}
 
@@ -197,6 +202,32 @@ func (e *Engine) ListOrders(filter OrderFilter) []PaperOrder {
 	defer e.mu.Unlock()
 
 	return filterOrders(cloneOrders(e.orders), filter)
+}
+
+func (e *Engine) ListOrdersBySession(sessionID string, filter OrderFilter) ([]PaperOrder, error) {
+	e.mu.Lock()
+	accountID := e.account.ID
+	currentSessionID := e.currentSession.ID
+	currentOrders := cloneOrders(e.orders)
+	store := e.store
+	e.mu.Unlock()
+
+	filter.SessionID = sessionID
+	if sessionID == "" || sessionID == currentSessionID {
+		return filterOrders(currentOrders, filter), nil
+	}
+	if store == nil {
+		return nil, ErrSessionNotFound
+	}
+
+	orders, found, err := store.LoadSessionOrders(accountID, sessionID, filter)
+	if err != nil {
+		return nil, err
+	}
+	if !found {
+		return nil, ErrSessionNotFound
+	}
+	return orders, nil
 }
 
 func (e *Engine) Rules() SimulationRules {
@@ -279,7 +310,7 @@ func (e *Engine) ApplyMarketPrices(ticks []marketdata.PriceTickV1) (int, error) 
 					continue
 				}
 			}
-			if _, err := e.processPendingExecutionSliceLocked(&execution, tick.Price, tick.Timestamp); err != nil {
+			if _, err := e.processPendingExecutionAttemptLocked(&execution, tick.Price, tick.Timestamp); err != nil {
 				e.rejectSignalLocked(SignalV1{
 					StrategyID: execution.StrategyID,
 					SignalID:   execution.SignalID,
@@ -416,6 +447,7 @@ func clonePendingExecutions(input []PendingExecution) []PendingExecution {
 			RequestedPrice:        execution.RequestedPrice,
 			RemainingQuantity:     execution.RemainingQuantity,
 			RemainingLatencyTicks: execution.RemainingLatencyTicks,
+			ElapsedExecutionTicks: execution.ElapsedExecutionTicks,
 			CreatedAt:             execution.CreatedAt,
 			Details:               cloneDetails(execution.Details),
 		})
@@ -447,7 +479,22 @@ func cloneMarketExecutionProfile(input MarketExecutionProfile) MarketExecutionPr
 		SignalLatencyTicks:     input.SignalLatencyTicks,
 		SpreadBps:              input.SpreadBps,
 		MaxFillNotionalPerTick: input.MaxFillNotionalPerTick,
+		LiquidityCurve:         cloneLiquidityCurve(input.LiquidityCurve),
+		QueuePriority:          input.QueuePriority,
+		MarketImpactBpsPer10k:  input.MarketImpactBpsPer10k,
+		CancelAfterTicks:       input.CancelAfterTicks,
 	}
+}
+
+func cloneLiquidityCurve(input []LiquidityCurvePoint) []LiquidityCurvePoint {
+	output := make([]LiquidityCurvePoint, 0, len(input))
+	for _, point := range input {
+		output = append(output, LiquidityCurvePoint{
+			MaxNotional: point.MaxNotional,
+			FillRatio:   point.FillRatio,
+		})
+	}
+	return output
 }
 
 func (e *Engine) buildPortfolioSummary() PortfolioSummary {
@@ -527,6 +574,9 @@ func filterOrders(orders []PaperOrder, filter OrderFilter) []PaperOrder {
 	filtered := make([]PaperOrder, 0, len(orders))
 	for i := len(orders) - 1; i >= 0; i-- {
 		order := orders[i]
+		if filter.SessionID != "" && order.SessionID != "" && order.SessionID != filter.SessionID {
+			continue
+		}
 		if filter.Symbol != "" && order.Symbol != filter.Symbol {
 			continue
 		}
@@ -656,22 +706,27 @@ func (e *Engine) SubscribeTimeline() (TimelineSubscription, func()) {
 	return ch, unsubscribe
 }
 
-func deriveOrderCounter(orders []PaperOrder) uint64 {
+func deriveOrderCounter(orders []PaperOrder, pendingExecutions []PendingExecution) uint64 {
 	maxCounter := uint64(len(orders))
 	for _, order := range orders {
-		rawCounter, found := strings.CutPrefix(order.ID, "paper-order-")
-		if !found {
-			continue
-		}
-
-		parsedCounter, err := strconv.ParseUint(rawCounter, 10, 64)
-		if err != nil {
-			continue
-		}
-		if parsedCounter > maxCounter {
-			maxCounter = parsedCounter
-		}
+		maxCounter = max(maxCounter, parseOrderCounter(order.ID))
+	}
+	for _, execution := range pendingExecutions {
+		maxCounter = max(maxCounter, parseOrderCounter(execution.OrderID))
 	}
 
 	return maxCounter
+}
+
+func parseOrderCounter(orderID string) uint64 {
+	rawCounter, found := strings.CutPrefix(orderID, "paper-order-")
+	if !found {
+		return 0
+	}
+
+	parsedCounter, err := strconv.ParseUint(rawCounter, 10, 64)
+	if err != nil {
+		return 0
+	}
+	return parsedCounter
 }

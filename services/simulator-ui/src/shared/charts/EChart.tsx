@@ -59,6 +59,8 @@ export interface EChartProps {
   className?: string;
   height?: number;
   loading?: boolean;
+  loadingDescription?: string;
+  loadingTitle?: string;
   emptyTitle?: string;
   emptyDescription?: string;
   style?: CSSProperties;
@@ -71,6 +73,8 @@ export function EChart({
   emptyTitle = "Chart will render here",
   height = 320,
   loading = false,
+  loadingDescription = "Chart data is loading without changing the reserved chart area.",
+  loadingTitle = "Loading chart data",
   onReady,
   option,
   style,
@@ -154,21 +158,40 @@ export function EChart({
 
   const showChart = Boolean(option) || loading;
   const showRuntimeOverlay = Boolean(option) && !isRuntimeReady;
+  const showLoadingOverlay = loading && (!option || !isRuntimeReady);
   const showEmptyState = !option && !loading;
 
   return (
     <div
+      aria-busy={loading}
       className={cx(
-        "chart-fade-mask relative overflow-hidden rounded-[24px] border border-white/8 bg-white/[0.02]",
+        "relative overflow-hidden rounded-[24px] border border-white/8 bg-white/[0.02]",
         className,
       )}
+      data-chart-state={loading ? "loading" : showEmptyState ? "empty" : "ready"}
       style={{ height, ...style }}
     >
       <div ref={elementRef} className={cx("h-full w-full", !showChart ? "opacity-0" : "")} />
       {showRuntimeOverlay ? (
-        <div className="absolute inset-0 flex items-center justify-center bg-slate-950/55 backdrop-blur-sm">
+        <div className="absolute inset-0 flex items-center justify-center bg-slate-950/72">
           <div className="rounded-full border border-white/10 bg-white/[0.05] px-4 py-2 text-sm text-slate-300">
             Loading chart runtime...
+          </div>
+        </div>
+      ) : null}
+      {showLoadingOverlay ? (
+        <div
+          className="absolute inset-0 flex items-center justify-center bg-slate-950/58 px-6"
+          role="status"
+        >
+          <div className="max-w-sm rounded-[20px] border border-sky-300/18 bg-sky-300/[0.08] px-5 py-4 text-center shadow-[0_18px_36px_rgba(0,0,0,0.24)]">
+            <div className="mx-auto mb-3 size-8 animate-pulse rounded-full border border-sky-300/30 bg-sky-300/10" />
+            <div className="text-sm font-medium text-sky-100">
+              {loadingTitle}
+            </div>
+            <p className="mt-2 text-sm leading-6 text-slate-300">
+              {loadingDescription}
+            </p>
           </div>
         </div>
       ) : null}

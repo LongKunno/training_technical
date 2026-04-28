@@ -31,4 +31,19 @@ wait_for_response http://simulator_ui/core/health | jq -e '.status == "ok"' >/de
 echo "Checking simulator_ui dev proxy to data_pipeline..."
 wait_for_response http://simulator_ui/data/health | jq -e '.status == "ok"' >/dev/null
 
+echo "Checking simulator_ui dev bot runner health surface..."
+wait_for_response http://simulator_ui/bot/health | jq -e '.status == "ok"' >/dev/null
+
+echo "Checking simulator_ui dev does not expose bot runner internals..."
+bot_internal_status=$(curl -s -o /dev/null -w '%{http_code}' http://simulator_ui/bot/internal/runs/start)
+test "$bot_internal_status" = "404"
+
+echo "Checking simulator_ui dev does not expose core ops internals..."
+core_ops_status=$(curl -s -o /dev/null -w '%{http_code}' http://simulator_ui/core/internal/ops/benchmark/cpu)
+test "$core_ops_status" = "404"
+
+echo "Checking simulator_ui dev does not expose data ops internals..."
+data_ops_status=$(curl -s -o /dev/null -w '%{http_code}' http://simulator_ui/data/internal/ops/benchmark/cpu)
+test "$data_ops_status" = "404"
+
 echo "simulator_ui dev smoke passed."

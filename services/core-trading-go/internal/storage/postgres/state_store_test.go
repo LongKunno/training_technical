@@ -1,6 +1,7 @@
 package postgres_test
 
 import (
+	"encoding/json"
 	"regexp"
 	"testing"
 	"time"
@@ -202,6 +203,7 @@ func TestSaveStatePersistsExtendedOrderFieldsAndRuntimeSnapshots(t *testing.T) {
 		Orders: []papertrading.PaperOrder{
 			{
 				ID:                "paper-order-1",
+				SessionID:         "sim-session-1",
 				AccountID:         "paper-account-1",
 				Symbol:            "BTCUSDT",
 				Side:              papertrading.OrderSideBuy,
@@ -263,12 +265,13 @@ func TestSaveStatePersistsExtendedOrderFieldsAndRuntimeSnapshots(t *testing.T) {
 	mock.ExpectExec(`INSERT INTO paper_accounts`).
 		WithArgs("paper-account-1", 10000.0, 9050.0, 125.0, 0.001, 0.002).
 		WillReturnResult(sqlmock.NewResult(1, 1))
-	mock.ExpectExec(`DELETE FROM paper_orders WHERE account_id = \$1`).
-		WithArgs("paper-account-1").
+	mock.ExpectExec(`DELETE FROM paper_orders WHERE account_id = \$1 AND session_id = \$2`).
+		WithArgs("paper-account-1", "sim-session-1").
 		WillReturnResult(sqlmock.NewResult(0, 0))
 	mock.ExpectExec(`INSERT INTO paper_orders`).
 		WithArgs(
 			"paper-order-1",
+			"sim-session-1",
 			"paper-account-1",
 			"BTCUSDT",
 			"buy",
@@ -319,6 +322,170 @@ func TestSaveStatePersistsExtendedOrderFieldsAndRuntimeSnapshots(t *testing.T) {
 
 	if err := store.SaveState(state); err != nil {
 		t.Fatalf("expected save state to succeed, got error: %v", err)
+	}
+	if err := mock.ExpectationsWereMet(); err != nil {
+		t.Fatalf("unmet sql expectations: %v", err)
+	}
+}
+
+func TestLoadSessionReportAndTimelineFromSnapshot(t *testing.T) {
+	t.Parallel()
+
+	db, mock, err := sqlmock.New()
+	if err != nil {
+		t.Fatalf("failed to create sqlmock: %v", err)
+	}
+	defer func() {
+		_ = db.Close()
+	}()
+
+	store := postgres.NewStateStore(db)
+	startedAt := time.Date(2026, 4, 25, 9, 0, 0, 0, time.UTC)
+	report := papertrading.SessionReport{
+		SessionID:       "session-history-1",
+		Status:          papertrading.SessionStatusStopped,
+		StartedAt:       startedAt,
+		FilledOrders:    2,
+		RejectedSignals: 1,
+		TotalPnL:        42,
+		MaxDrawdown:     3.5,
+		Timeline: []papertrading.SessionTimelinePoint{
+			{
+				Timestamp:   startedAt,
+				Equity:      1000,
+				EventType:   "session_started",
+				CashBalance: 1000,
+			},
+			{
+				Timestamp:     startedAt.Add(time.Minute),
+				Equity:        1042,
+				UnrealizedPnL: 42,
+				EventType:     "market_tick",
+				CashBalance:   900,
+			},
+		},
+	}
+	rawReport, err := json.Marshal(report)
+	if err != nil {
+		t.Fatalf("failed to marshal report: %v", err)
+	}
+
+	query := `SELECT report_snapshot\s+FROM paper_sessions\s+WHERE account_id = \$1 AND session_id = \$2`
+	mock.ExpectQuery(query).
+		WithArgs("paper-account-1", "session-history-1").
+		WillReturnRows(sqlmock.NewRows([]string{"report_snapshot"}).AddRow(rawReport))
+	mock.ExpectQuery(query).
+		WithArgs("paper-account-1", "session-history-1").
+		WillReturnRows(sqlmock.NewRows([]string{"report_snapshot"}).AddRow(rawReport))
+
+	loadedReport, found, err := store.LoadSessionReport("paper-account-1", "session-history-1")
+	if err != nil {
+		t.Fatalf("expected load report to succeed, got %v", err)
+	}
+	if !found {
+		t.Fatal("expected historical report to be found")
+	}
+	if loadedReport.TotalPnL != 42 || loadedReport.MaxDrawdown != 3.5 || len(loadedReport.Timeline) != 2 {
+		t.Fatalf("expected report snapshot fields to restore, got %+v", loadedReport)
+	}
+
+	timeline, found, err := store.LoadSessionTimeline("paper-account-1", "session-history-1")
+	if err != nil {
+		t.Fatalf("expected load timeline to succeed, got %v", err)
+	}
+	if !found {
+		t.Fatal("expected historical timeline to be found")
+	}
+	if len(timeline) != 2 || timeline[1].EventType != "market_tick" || timeline[1].Equity != 1042 {
+		t.Fatalf("expected timeline to come from report snapshot, got %+v", timeline)
+	}
+
+	if err := mock.ExpectationsWereMet(); err != nil {
+		t.Fatalf("unmet sql expectations: %v", err)
+	}
+}
+
+func TestLoadSessionOrdersFiltersBySessionAndSymbol(t *testing.T) {
+	t.Parallel()
+
+	db, mock, err := sqlmock.New()
+	if err != nil {
+		t.Fatalf("failed to create sqlmock: %v", err)
+	}
+	defer func() {
+		_ = db.Close()
+	}()
+
+	store := postgres.NewStateStore(db)
+	executedAt := time.Date(2026, 4, 25, 10, 15, 0, 0, time.UTC)
+
+	mock.ExpectQuery(`SELECT EXISTS`).
+		WithArgs("paper-account-1", "session-history-1").
+		WillReturnRows(sqlmock.NewRows([]string{"exists"}).AddRow(true))
+
+	rows := sqlmock.NewRows([]string{
+		"id",
+		"session_id",
+		"account_id",
+		"symbol",
+		"side",
+		"quantity",
+		"requested_quantity",
+		"price",
+		"requested_price",
+		"notional",
+		"requested_notional",
+		"fee",
+		"fee_rate",
+		"slippage_rate",
+		"fill_count",
+		"remaining_quantity",
+		"status",
+		"terminal_reason",
+		"executed_at",
+	}).AddRow(
+		"paper-order-1",
+		"session-history-1",
+		"paper-account-1",
+		"BTCUSDT",
+		"buy",
+		1.5,
+		2.0,
+		101.0,
+		100.0,
+		151.5,
+		200.0,
+		0.15,
+		0.001,
+		0.002,
+		2,
+		0.5,
+		"stopped",
+		"cancel_after_ticks",
+		executedAt,
+	)
+
+	mock.ExpectQuery(`FROM paper_orders`).
+		WithArgs("paper-account-1", "session-history-1", "BTCUSDT", "buy", 10, 0).
+		WillReturnRows(rows)
+
+	orders, found, err := store.LoadSessionOrders("paper-account-1", "session-history-1", papertrading.OrderFilter{
+		Symbol: "BTCUSDT",
+		Side:   papertrading.OrderSideBuy,
+		Limit:  10,
+		Offset: 0,
+	})
+	if err != nil {
+		t.Fatalf("expected load session orders to succeed, got error: %v", err)
+	}
+	if !found {
+		t.Fatal("expected session orders to be found")
+	}
+	if len(orders) != 1 {
+		t.Fatalf("expected one order, got %+v", orders)
+	}
+	if orders[0].SessionID != "session-history-1" || orders[0].TerminalReason != "cancel_after_ticks" {
+		t.Fatalf("unexpected restored order %+v", orders[0])
 	}
 	if err := mock.ExpectationsWereMet(); err != nil {
 		t.Fatalf("unmet sql expectations: %v", err)

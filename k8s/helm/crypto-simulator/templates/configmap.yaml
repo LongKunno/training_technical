@@ -19,6 +19,8 @@ data:
   PAPER_MAX_DAILY_LOSS: {{ .Values.coreTrading.env.maxDailyLoss | quote }}
   PAPER_COOLDOWN_SECONDS: {{ .Values.coreTrading.env.cooldownSeconds | quote }}
   PAPER_MAX_OPEN_NOTIONAL: {{ .Values.coreTrading.env.maxOpenNotional | quote }}
+  SIM_HEARTBEAT_TIMEOUT_SECONDS: {{ .Values.coreTrading.env.heartbeatTimeoutSeconds | quote }}
+  SIM_RECONCILE_INTERVAL_SECONDS: {{ .Values.coreTrading.env.reconcileIntervalSeconds | quote }}
   BOT_RUNNER_BASE_URL: {{ include "crypto-simulator.botRunnerBaseURL" . | quote }}
   CORE_TRADING_KAFKA_BOOTSTRAP_SERVERS: {{ include "crypto-simulator.kafkaBootstrapServers" . | quote }}
   CORE_TRADING_KAFKA_TOPIC: {{ .Values.coreTrading.env.kafkaTopic | quote }}
@@ -37,3 +39,4 @@ data:
   BOT_RUNNER_REQUEST_TIMEOUT_SECONDS: {{ .Values.botRunner.env.requestTimeoutSeconds | quote }}
   SIMULATOR_UI_CORE_PROXY_TARGET: {{ include "crypto-simulator.coreTradingBaseURL" . | quote }}
   SIMULATOR_UI_DATA_PROXY_TARGET: {{ include "crypto-simulator.dataPipelineBaseURL" . | quote }}
+  SIMULATOR_UI_BOT_PROXY_TARGET: {{ include "crypto-simulator.botRunnerBaseURL" . | quote }}

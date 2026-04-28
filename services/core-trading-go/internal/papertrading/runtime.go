@@ -1,6 +1,7 @@
 package papertrading
 
 import (
+	"errors"
 	"fmt"
 	"slices"
 	"strings"
@@ -66,6 +67,11 @@ func (e *Engine) restoreRuntimeState(state PersistentState, now time.Time) {
 	}
 
 	e.currentSession = state.Session
+	for index := range e.orders {
+		if e.orders[index].SessionID == "" {
+			e.orders[index].SessionID = e.currentSession.ID
+		}
+	}
 	e.auditEvents = cloneAuditEvents(state.AuditEvents)
 	e.lastOrderAt = deriveLastOrderTimes(state.Orders)
 	e.currentMarketProfile = cloneMarketExecutionProfile(state.MarketProfile)
@@ -478,7 +484,7 @@ func (e *Engine) ProcessSignal(signal SignalV1) (SignalExecution, error) {
 		if marketPrice <= 0 {
 			marketPrice = priceHint
 		}
-		order, err = e.processPendingExecutionSliceLocked(&pending, marketPrice, signal.Timestamp)
+		order, err = e.processPendingExecutionAttemptLocked(&pending, marketPrice, signal.Timestamp)
 		if err != nil {
 			e.restoreLockedState(previousState)
 			e.rejectSignalLocked(signal, err)
@@ -554,6 +560,7 @@ func (e *Engine) placeMarketOrderLocked(request PlaceOrderRequest, extraDetails 
 	e.orderCounter++
 	order := PaperOrder{
 		ID:                fmt.Sprintf("paper-order-%d", e.orderCounter),
+		SessionID:         e.currentSession.ID,
 		AccountID:         e.account.ID,
 		Symbol:            request.Symbol,
 		Side:              request.Side,
@@ -631,6 +638,28 @@ func validateMarketExecutionProfile(profile MarketExecutionProfile) error {
 	if profile.MaxFillNotionalPerTick < 0 {
 		return ErrInvalidMarketProfile
 	}
+	previousMaxNotional := 0.0
+	for _, point := range profile.LiquidityCurve {
+		if point.MaxNotional <= 0 {
+			return ErrInvalidMarketProfile
+		}
+		if point.MaxNotional < previousMaxNotional {
+			return ErrInvalidMarketProfile
+		}
+		if point.FillRatio <= 0 || point.FillRatio > 1 {
+			return ErrInvalidMarketProfile
+		}
+		previousMaxNotional = point.MaxNotional
+	}
+	if profile.QueuePriority < 0 || profile.QueuePriority > 1 {
+		return ErrInvalidMarketProfile
+	}
+	if profile.MarketImpactBpsPer10k < 0 {
+		return ErrInvalidMarketProfile
+	}
+	if profile.CancelAfterTicks < 0 {
+		return ErrInvalidMarketProfile
+	}
 	return nil
 }
 
@@ -656,14 +685,19 @@ func (e *Engine) deriveSignalOrderLocked(signal SignalV1) (float64, float64, err
 
 func (e *Engine) rejectSignalLocked(signal SignalV1, err error) {
 	e.rejectedSignals++
-	e.appendAuditLocked("signal_rejected", err.Error(), signal.Symbol, time.Now().UTC(), map[string]any{
+	details := map[string]any{
 		"strategy_id": signal.StrategyID,
 		"signal_id":   signal.SignalID,
 		"side":        signal.Side,
 		"run_id":      signal.RunID,
 		"bot_id":      signal.BotID,
 		"bot_version": signal.BotVersion,
-	})
+		"reason":      err.Error(),
+	}
+	if riskControl := riskRejectReason(err); riskControl != "" {
+		details["risk_control"] = riskControl
+	}
+	e.appendAuditLocked("signal_rejected", err.Error(), signal.Symbol, time.Now().UTC(), details)
 }
 
 func (e *Engine) noteFilledOrderLocked(order *PaperOrder, fillQuantity float64, fillFee float64, fillPrice float64, firstFill bool, eventType string, message string, extraDetails map[string]any) {
@@ -701,11 +735,12 @@ func (e *Engine) noteFilledOrderLocked(order *PaperOrder, fillQuantity float64, 
 }
 
 func (e *Engine) processPendingExecutionSliceLocked(execution *PendingExecution, marketPrice float64, timestamp time.Time) (*PaperOrder, error) {
-	executionPrice := e.applyExecutionPrice(execution.Side, marketPrice)
-	fillQuantity := e.maxFillQuantityForTick(execution.RemainingQuantity, executionPrice)
+	baseExecutionPrice := e.applyQuotedExecutionPrice(execution.Side, marketPrice)
+	fillQuantity := e.maxFillQuantityForTick(execution.RemainingQuantity, baseExecutionPrice)
 	if fillQuantity <= 0 {
 		return nil, ErrInvalidQuantity
 	}
+	executionPrice := e.applyMarketImpact(execution.Side, baseExecutionPrice, fillQuantity*baseExecutionPrice)
 
 	request := PlaceOrderRequest{
 		Symbol:   execution.Symbol,
@@ -778,6 +813,19 @@ func (e *Engine) processPendingExecutionSliceLocked(execution *PendingExecution,
 	return order, nil
 }
 
+func (e *Engine) processPendingExecutionAttemptLocked(execution *PendingExecution, marketPrice float64, timestamp time.Time) (*PaperOrder, error) {
+	execution.ElapsedExecutionTicks++
+	order, err := e.processPendingExecutionSliceLocked(execution, marketPrice, timestamp)
+	if err != nil {
+		return nil, err
+	}
+	if execution.RemainingQuantity > 0 && e.shouldCancelAfterTicks(*execution) {
+		e.finalizeOrderLocked(order, "stopped", "cancel_after_ticks", timestamp, "order_fill_stopped", "paper order stopped before full fill", execution.Details)
+		execution.RemainingQuantity = 0
+	}
+	return order, nil
+}
+
 func (e *Engine) ensurePendingOrderLocked(execution PendingExecution, timestamp time.Time) (int, bool) {
 	if index := e.findOrderIndexByIDLocked(execution.OrderID); index >= 0 {
 		return index, false
@@ -785,6 +833,7 @@ func (e *Engine) ensurePendingOrderLocked(execution PendingExecution, timestamp 
 
 	e.orders = append(e.orders, PaperOrder{
 		ID:                execution.OrderID,
+		SessionID:         e.currentSession.ID,
 		AccountID:         e.account.ID,
 		Symbol:            execution.Symbol,
 		Side:              execution.Side,
@@ -862,7 +911,7 @@ func (e *Engine) finalizePendingExecutionsForSessionStopLocked(timestamp time.Ti
 	e.pendingExecutions = nil
 }
 
-func (e *Engine) applyExecutionPrice(side OrderSide, marketPrice float64) float64 {
+func (e *Engine) applyQuotedExecutionPrice(side OrderSide, marketPrice float64) float64 {
 	spreadMultiplier := e.currentMarketProfile.SpreadBps / 20000
 	switch side {
 	case OrderSideBuy:
@@ -881,17 +930,60 @@ func (e *Engine) maxFillQuantityForTick(remainingQuantity float64, executionPric
 	if executionPrice <= 0 {
 		return 0
 	}
-	if e.currentMarketProfile.MaxFillNotionalPerTick <= 0 {
-		return remainingQuantity
+	remainingNotional := remainingQuantity * executionPrice
+	fillNotional := remainingNotional
+	if e.currentMarketProfile.MaxFillNotionalPerTick > 0 && e.currentMarketProfile.MaxFillNotionalPerTick < fillNotional {
+		fillNotional = e.currentMarketProfile.MaxFillNotionalPerTick
 	}
-	maxQuantity := e.currentMarketProfile.MaxFillNotionalPerTick / executionPrice
-	if maxQuantity <= 0 {
+
+	// Formula: min(remaining notional, per-tick cap) * liquidity ratio(remaining notional) * queue priority.
+	fillNotional *= e.liquidityFillRatio(remainingNotional)
+	fillNotional *= e.effectiveQueuePriority()
+	if fillNotional <= 0 {
 		return 0
 	}
-	if maxQuantity < remainingQuantity {
-		return maxQuantity
+	if fillNotional >= remainingNotional {
+		return remainingQuantity
 	}
-	return remainingQuantity
+	return fillNotional / executionPrice
+}
+
+func (e *Engine) liquidityFillRatio(remainingNotional float64) float64 {
+	if len(e.currentMarketProfile.LiquidityCurve) == 0 {
+		return 1
+	}
+	for _, point := range e.currentMarketProfile.LiquidityCurve {
+		if remainingNotional <= point.MaxNotional {
+			return point.FillRatio
+		}
+	}
+	return e.currentMarketProfile.LiquidityCurve[len(e.currentMarketProfile.LiquidityCurve)-1].FillRatio
+}
+
+func (e *Engine) effectiveQueuePriority() float64 {
+	if e.currentMarketProfile.QueuePriority <= 0 {
+		return 1
+	}
+	return e.currentMarketProfile.QueuePriority
+}
+
+func (e *Engine) applyMarketImpact(side OrderSide, executionPrice float64, fillNotional float64) float64 {
+	if e.currentMarketProfile.MarketImpactBpsPer10k <= 0 || fillNotional <= 0 {
+		return executionPrice
+	}
+	impactMultiplier := (e.currentMarketProfile.MarketImpactBpsPer10k * (fillNotional / 10000)) / 10000
+	switch side {
+	case OrderSideBuy:
+		return executionPrice * (1 + impactMultiplier)
+	case OrderSideSell:
+		return executionPrice * (1 - impactMultiplier)
+	default:
+		return executionPrice
+	}
+}
+
+func (e *Engine) shouldCancelAfterTicks(execution PendingExecution) bool {
+	return e.currentMarketProfile.CancelAfterTicks > 0 && execution.ElapsedExecutionTicks >= e.currentMarketProfile.CancelAfterTicks
 }
 
 func (e *Engine) validateOrderGuardsLocked(request PlaceOrderRequest, executionPrice float64, now time.Time) error {
@@ -1023,6 +1115,7 @@ func (e *Engine) appendTimelinePointLocked(timestamp time.Time, eventType string
 
 func (e *Engine) buildSessionReportLocked() SessionReport {
 	summary := e.buildPortfolioSummary()
+	executionQuality := deriveExecutionQualityMetrics(e.orders)
 	symbols := make([]SymbolReport, 0, len(e.symbolStats))
 	for symbol, metrics := range e.symbolStats {
 		symbols = append(symbols, SymbolReport{
@@ -1036,21 +1129,25 @@ func (e *Engine) buildSessionReportLocked() SessionReport {
 	})
 
 	return SessionReport{
-		SessionID:       e.currentSession.ID,
-		Status:          e.currentSession.Status,
-		StartedAt:       e.currentSession.StartedAt,
-		StoppedAt:       e.currentSession.StoppedAt,
-		ResetCount:      e.currentSession.ResetCount,
-		FilledOrders:    e.filledOrders,
-		RejectedSignals: e.rejectedSignals,
-		FeesPaid:        e.feesPaid,
-		SlippageCost:    e.slippageCost,
-		RealizedPnL:     summary.RealizedPnL,
-		UnrealizedPnL:   summary.UnrealizedPnL,
-		TotalPnL:        summary.RealizedPnL + summary.UnrealizedPnL,
-		MaxDrawdown:     e.maxDrawdown,
-		Symbols:         symbols,
-		Timeline:        cloneTimelinePoints(e.timeline),
+		SessionID:          e.currentSession.ID,
+		Status:             e.currentSession.Status,
+		StartedAt:          e.currentSession.StartedAt,
+		StoppedAt:          e.currentSession.StoppedAt,
+		ResetCount:         e.currentSession.ResetCount,
+		FilledOrders:       e.filledOrders,
+		RejectedSignals:    e.rejectedSignals,
+		FeesPaid:           e.feesPaid,
+		SlippageCost:       e.slippageCost,
+		FillRatio:          executionQuality.FillRatio,
+		AverageSlippageBps: executionQuality.AverageSlippageBps,
+		StoppedOrders:      executionQuality.StoppedOrders,
+		CancelRate:         executionQuality.CancelRate,
+		RealizedPnL:        summary.RealizedPnL,
+		UnrealizedPnL:      summary.UnrealizedPnL,
+		TotalPnL:           summary.RealizedPnL + summary.UnrealizedPnL,
+		MaxDrawdown:        e.maxDrawdown,
+		Symbols:            symbols,
+		Timeline:           cloneTimelinePoints(e.timeline),
 	}
 }
 
@@ -1065,7 +1162,6 @@ func (e *Engine) resetTradingStateLocked() {
 	e.lastTradePrices = make(map[string]float64)
 	e.markPrices = make(map[string]marketdata.PriceTickV1)
 	e.realizedPnL = 0
-	e.currentMarketProfile = MarketExecutionProfile{}
 	e.auditEvents = nil
 	e.feesPaid = 0
 	e.slippageCost = 0
@@ -1125,8 +1221,85 @@ func isSymbolAllowed(symbol string, allowedSymbols []string) bool {
 	return false
 }
 
+func riskRejectReason(err error) string {
+	switch {
+	case errors.Is(err, ErrSymbolBlocked):
+		return "symbol_blocked"
+	case errors.Is(err, ErrMaxPositionExceeded):
+		return "max_position_quantity"
+	case errors.Is(err, ErrMaxOrderNotionalExceeded):
+		return "max_order_notional"
+	case errors.Is(err, ErrMaxDailyLossExceeded):
+		return "max_daily_loss"
+	case errors.Is(err, ErrCooldownActive):
+		return "cooldown"
+	case errors.Is(err, ErrMaxOpenNotionalExceeded):
+		return "max_open_notional"
+	default:
+		return ""
+	}
+}
+
 func orderSlippageCost(order PaperOrder) float64 {
 	return abs(order.Price-order.RequestedPrice) * order.Quantity
+}
+
+type executionQualityMetrics struct {
+	FillRatio          float64
+	AverageSlippageBps float64
+	StoppedOrders      int
+	CancelRate         float64
+}
+
+func deriveExecutionQualityMetrics(orders []PaperOrder) executionQualityMetrics {
+	var requestedQuantity float64
+	var filledQuantity float64
+	var filledNotional float64
+	var slippageCost float64
+	var attemptedOrders int
+	var stoppedOrders int
+
+	for _, order := range orders {
+		requested := order.RequestedQuantity
+		if requested <= 0 {
+			requested = order.Quantity + order.RemainingQuantity
+		}
+		if requested <= 0 && order.Quantity > 0 {
+			requested = order.Quantity
+		}
+		if requested > 0 {
+			requestedQuantity += requested
+			attemptedOrders++
+		}
+
+		if order.Quantity > 0 {
+			filledQuantity += order.Quantity
+			notional := order.Notional
+			if notional <= 0 {
+				notional = order.Price * order.Quantity
+			}
+			filledNotional += notional
+			slippageCost += orderSlippageCost(order)
+		}
+
+		if order.Status == "stopped" {
+			stoppedOrders++
+		}
+	}
+
+	metrics := executionQualityMetrics{
+		StoppedOrders: stoppedOrders,
+	}
+	if requestedQuantity > 0 {
+		metrics.FillRatio = filledQuantity / requestedQuantity
+	}
+	if filledNotional > 0 {
+		metrics.AverageSlippageBps = (slippageCost / filledNotional) * 10000
+	}
+	if attemptedOrders > 0 {
+		metrics.CancelRate = float64(stoppedOrders) / float64(attemptedOrders)
+	}
+	return metrics
 }
 
 func abs(value float64) float64 {
@@ -1226,12 +1399,17 @@ func deriveLastOrderTimes(orders []PaperOrder) map[string]time.Time {
 }
 
 func deriveReportFromOrders(session SimulationSession, orders []PaperOrder) SessionReport {
+	executionQuality := deriveExecutionQualityMetrics(orders)
 	report := SessionReport{
-		SessionID:  session.ID,
-		Status:     session.Status,
-		StartedAt:  session.StartedAt,
-		StoppedAt:  session.StoppedAt,
-		ResetCount: session.ResetCount,
+		SessionID:          session.ID,
+		Status:             session.Status,
+		StartedAt:          session.StartedAt,
+		StoppedAt:          session.StoppedAt,
+		ResetCount:         session.ResetCount,
+		FillRatio:          executionQuality.FillRatio,
+		AverageSlippageBps: executionQuality.AverageSlippageBps,
+		StoppedOrders:      executionQuality.StoppedOrders,
+		CancelRate:         executionQuality.CancelRate,
 	}
 	stats := make(map[string]SymbolReport)
 	for _, order := range orders {

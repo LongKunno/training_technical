@@ -50,6 +50,15 @@ export interface MarketMicrostructureProfile {
   signal_latency_ticks: number;
   spread_bps: number;
   max_fill_notional_per_tick: number;
+  liquidity_curve?: LiquidityCurvePoint[];
+  queue_priority?: number;
+  market_impact_bps_per_10k?: number;
+  cancel_after_ticks?: number;
+}
+
+export interface LiquidityCurvePoint {
+  max_notional: number;
+  fill_ratio: number;
 }
 
 export interface ScenarioCatalogResponse {

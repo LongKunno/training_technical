@@ -86,7 +86,10 @@ services:
       - PAPER_MAX_DAILY_LOSS=${PAPER_MAX_DAILY_LOSS:-0}
       - PAPER_COOLDOWN_SECONDS=${PAPER_COOLDOWN_SECONDS:-0}
       - PAPER_MAX_OPEN_NOTIONAL=${PAPER_MAX_OPEN_NOTIONAL:-0}
+      - SIM_HEARTBEAT_TIMEOUT_SECONDS=${SIM_HEARTBEAT_TIMEOUT_SECONDS:-30}
+      - SIM_RECONCILE_INTERVAL_SECONDS=${SIM_RECONCILE_INTERVAL_SECONDS:-5}
       - BOT_RUNNER_BASE_URL=${BOT_RUNNER_BASE_URL:-http://bot_runner:8001}
+      - DATA_PIPELINE_BASE_URL=${DATA_PIPELINE_BASE_URL:-http://data_pipeline:8000}
       - CORE_TRADING_KAFKA_BOOTSTRAP_SERVERS=${CORE_TRADING_KAFKA_BOOTSTRAP_SERVERS:-kafka:9092}
       - CORE_TRADING_KAFKA_TOPIC=${CORE_TRADING_KAFKA_TOPIC:-price-ticks-v1}
       - CORE_TRADING_KAFKA_GROUP_ID=${CORE_TRADING_KAFKA_GROUP_ID:-core-trading-paper-engine}
@@ -118,6 +121,8 @@ services:
       - STRATEGY_SIGNAL_FIXTURE_PATH=${STRATEGY_SIGNAL_FIXTURE_PATH:-/app/app/fixtures/mock_signals.json}
       - MARKET_DATA_KAFKA_BOOTSTRAP_SERVERS=${MARKET_DATA_KAFKA_BOOTSTRAP_SERVERS:-kafka:9092}
       - MARKET_DATA_KAFKA_TOPIC=${MARKET_DATA_KAFKA_TOPIC:-price-ticks-v1}
+      - OPS_BENCHMARK_ENABLED=${OPS_BENCHMARK_ENABLED:-false}
+      - OPS_BENCHMARK_TOKEN=${OPS_BENCHMARK_TOKEN:-}
     depends_on:
       postgres:
         condition: service_healthy
@@ -152,6 +157,10 @@ services:
     container_name: simulator_ui
     ports:
       - "${SIMULATOR_UI_HOST_PORT:-18020}:80"
+    environment:
+      - SIMULATOR_UI_CORE_PROXY_TARGET=${SIMULATOR_UI_CORE_PROXY_TARGET:-http://core_trading:8080}
+      - SIMULATOR_UI_DATA_PROXY_TARGET=${SIMULATOR_UI_DATA_PROXY_TARGET:-http://data_pipeline:8000}
+      - SIMULATOR_UI_BOT_PROXY_TARGET=${SIMULATOR_UI_BOT_PROXY_TARGET:-http://bot_runner:8001}
     healthcheck:
       test: ["CMD-SHELL", "wget -qO- http://127.0.0.1/health >/dev/null 2>&1"]
       interval: 5s

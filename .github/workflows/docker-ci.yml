@@ -36,6 +36,21 @@ jobs:
       - name: Test Bot Runner
         run: make test-bot-runner
 
+      - name: Typecheck UI
+        run: make typecheck-ui
+
+      - name: Lint UI
+        run: make lint-ui
+
+      - name: Test UI
+        run: make test-ui
+
+      - name: Build UI
+        run: make build-ui
+
+      - name: Mocked browser UI acceptance
+        run: make test-e2e-ui
+
       - name: Smoke paper trading flow
         run: make smoke-paper
 
@@ -50,3 +65,9 @@ jobs:
 
       - name: Smoke simulation experiment flow
         run: make smoke-sim-experiment
+
+      - name: Smoke UI runtime proxy flow
+        run: make smoke-ui-runtime
+
+      - name: Smoke UI dev proxy flow
+        run: make smoke-ui-dev

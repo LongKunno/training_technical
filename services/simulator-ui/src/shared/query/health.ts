@@ -1,8 +1,8 @@
 import { useQuery } from "@tanstack/react-query";
 
-import { coreApi, dataApi } from "../api";
+import { botApi, coreApi, dataApi } from "../api";
 import type { ServiceHealth, UpstreamAvailability } from "../types";
-import { dataQueryKeys, paperQueryKeys } from "./keys";
+import { botQueryKeys, dataQueryKeys, paperQueryKeys } from "./keys";
 
 interface QueryHookOptions {
   enabled?: boolean;
@@ -46,6 +46,16 @@ export function useDataHealthQuery(options: QueryHookOptions = {}) {
     enabled: isEnabled(options.enabled),
     queryFn: ({ signal }) => dataApi.getHealth({ signal }),
     queryKey: dataQueryKeys.health(),
+    retry: 1,
+    staleTime: options.staleTime ?? DEFAULT_STALE_TIME,
+  });
+}
+
+export function useBotHealthQuery(options: QueryHookOptions = {}) {
+  return useQuery({
+    enabled: isEnabled(options.enabled),
+    queryFn: ({ signal }) => botApi.getHealth({ signal }),
+    queryKey: botQueryKeys.health(),
     retry: 1,
     staleTime: options.staleTime ?? DEFAULT_STALE_TIME,
   });

@@ -65,9 +65,24 @@ export const SearchIcon = createIcon(
   </>,
 );
 
+export const InfoIcon = createIcon(
+  <>
+    <circle cx="12" cy="12" r="8.5" />
+    <path d="M12 10.5v5" />
+    <path d="M12 7.5h.01" />
+  </>,
+);
+
 export const ChevronDownIcon = createIcon(
   <>
     <path d="m6 9 6 6 6-6" />
+  </>,
+);
+
+export const CloseIcon = createIcon(
+  <>
+    <path d="m6 6 12 12" />
+    <path d="m18 6-12 12" />
   </>,
 );
 
@@ -118,5 +133,13 @@ export const DatabaseIcon = createIcon(
     <path d="M5 5.5v7c0 1.4 3.1 2.5 7 2.5s7-1.1 7-2.5v-7" />
     <path d="M5 12.5c0 1.4 3.1 2.5 7 2.5s7-1.1 7-2.5" />
     <path d="M5 9c0 1.4 3.1 2.5 7 2.5S19 10.4 19 9" />
+  </>,
+);
+
+export const DownloadIcon = createIcon(
+  <>
+    <path d="M12 4v10" />
+    <path d="m8 10 4 4 4-4" />
+    <path d="M5 18h14" />
   </>,
 );

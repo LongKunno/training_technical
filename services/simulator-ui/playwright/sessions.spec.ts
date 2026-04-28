@@ -107,6 +107,8 @@ test("sessions route filters historical list without mounting SSE", async ({ pag
   await page.goto("/sessions");
 
   await expect(page.getByRole("heading", { name: "Recent sessions" })).toBeVisible();
+  await expect(page.getByRole("heading", { name: "Visible session status" })).toBeVisible();
+  await expect(page.getByRole("heading", { name: "Top session PnL" })).toBeVisible();
   await expect(page.getByRole("link", { name: "paper-live" })).toBeVisible();
   await expect(page.getByRole("link", { name: "paper-historical" })).toBeVisible();
 
@@ -121,6 +123,7 @@ test("sessions route filters historical list without mounting SSE", async ({ pag
   await expect(page).toHaveURL(
     /\/sessions\/paper-historical\?q=paper-historical&selected=paper-historical$/,
   );
+  await page.getByRole("tab", { name: /^Audit/ }).click();
   await expect(page.getByText("Loaded detail for paper-historical.")).toBeVisible();
 
   await page.getByRole("link", { name: "Back to sessions" }).click();
@@ -129,6 +132,80 @@ test("sessions route filters historical list without mounting SSE", async ({ pag
   await expect
     .poll(async () => getEventSourceUrls(page))
     .toEqual([]);
+});
+
+test("sessions timeline preview keeps chart space stable while loading empty data", async ({
+  page,
+}) => {
+  await installEventSourceMock(page);
+  await mockPlatformHealth(page);
+
+  await mockJson(page, "**/core/api/paper/session", {
+    session: {
+      id: "paper-live",
+      last_event_at: "2026-04-18T09:05:00Z",
+      reset_count: 0,
+      started_at: "2026-04-18T09:00:00Z",
+      status: "running",
+    },
+  });
+  await mockJson(page, "**/core/api/paper/sessions?*", {
+    sessions: [sessionHistory[0]],
+  });
+
+  let releaseReport = () => {};
+  let releaseTimeline = () => {};
+  const reportGate = new Promise<void>((resolve) => {
+    releaseReport = resolve;
+  });
+  const timelineGate = new Promise<void>((resolve) => {
+    releaseTimeline = resolve;
+  });
+
+  await mockJsonHandler(page, "**/core/api/paper/report?*", async (route) => {
+    await reportGate;
+    await fulfillJson(route, {
+      report: {
+        fees_paid: 4.5,
+        filled_orders: 2,
+        max_drawdown: 80,
+        realized_pnl: 120,
+        rejected_signals: 0,
+        reset_count: 0,
+        session_id: "paper-live",
+        slippage_cost: 1.2,
+        started_at: "2026-04-18T09:00:00Z",
+        status: "running",
+        symbols: [],
+        timeline: [],
+        total_pnl: 170,
+        unrealized_pnl: 0,
+      },
+    });
+  });
+  await mockJsonHandler(page, "**/core/api/paper/timeline?*", async (route) => {
+    await timelineGate;
+    await fulfillJson(route, { timeline: [] });
+  });
+
+  await page.goto("/sessions?selected=paper-live");
+
+  const loadingChart = page.locator('[data-chart-state="loading"]').first();
+  await expect(loadingChart).toBeVisible();
+  await expect(loadingChart.getByRole("status")).toContainText(
+    "Loading chart data",
+  );
+  const loadingBox = await loadingChart.boundingBox();
+  expect(loadingBox?.height).toBeGreaterThanOrEqual(300);
+
+  releaseReport();
+  releaseTimeline();
+
+  await expect(page.getByText("No timeline stored for this session")).toBeVisible();
+  const emptyChart = page.locator('[data-chart-state="empty"]').first();
+  await expect(emptyChart).toBeVisible();
+  const emptyBox = await emptyChart.boundingBox();
+  expect(emptyBox?.height).toBe(loadingBox?.height);
 });
 
 test("session detail stays historical and never mounts current-session SSE", async ({ page }) => {
@@ -171,9 +248,48 @@ test("session detail stays historical and never mounts current-session SSE", asy
   await expect(
     page.getByRole("heading", { name: "Historical detail for paper-historical" }),
   ).toBeVisible();
-  await expect(page.getByText("No SSE")).toBeVisible();
+  await expect(page.getByText("No SSE").first()).toBeVisible();
+  await page.getByRole("tab", { name: /^Audit/ }).click();
   await expect(page.getByText("Historical replay completed.")).toBeVisible();
   await expect(page.getByText("No timeline stored for this session")).toBeVisible();
+  await expect
+    .poll(async () => getEventSourceUrls(page))
+    .toEqual([]);
+});
+
+test("session detail surfaces core-down copy without mounting current-session SSE", async ({
+  page,
+}) => {
+  await installEventSourceMock(page);
+  await mockPlatformHealth(page, { core: "down" });
+
+  const coreUnavailablePayload = {
+    error: {
+      code: "upstream_unavailable",
+      message: "Core Trading (Go) is unavailable.",
+    },
+  };
+
+  await mockJsonHandler(page, "**/core/api/paper/report?session_id=paper-historical", async (route) => {
+    await fulfillJson(route, coreUnavailablePayload, 503);
+  });
+  await mockJsonHandler(page, "**/core/api/paper/audit?session_id=paper-historical*", async (route) => {
+    await fulfillJson(route, coreUnavailablePayload, 503);
+  });
+  await mockJsonHandler(page, "**/core/api/paper/timeline?session_id=paper-historical*", async (route) => {
+    await fulfillJson(route, coreUnavailablePayload, 503);
+  });
+
+  await page.goto("/sessions/paper-historical");
+
+  await expect(
+    page.getByRole("heading", { name: "Historical detail for paper-historical" }),
+  ).toBeVisible();
+  await expect(
+    page.getByRole("heading", { name: "Core trading API unavailable" }),
+  ).toBeVisible();
+  await expect(page.getByText("Historical detail is read-only")).toBeVisible();
+  await expect(page.getByText("No SSE").first()).toBeVisible();
   await expect
     .poll(async () => getEventSourceUrls(page))
     .toEqual([]);

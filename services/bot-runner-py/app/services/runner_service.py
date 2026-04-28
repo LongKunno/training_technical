@@ -1,11 +1,18 @@
 import asyncio
 from collections import defaultdict
 from dataclasses import dataclass
+from datetime import UTC, datetime
+import json
+import logging
 from typing import Awaitable, Callable
 
 import httpx
 
 from app.schemas.runner import ReplayTick, StartRunRequest
+
+
+logger = logging.getLogger("bot_runner.runner")
+logger.setLevel(logging.INFO)
 
 
 @dataclass(frozen=True)
@@ -27,6 +34,44 @@ BotExecutor = Callable[
     [httpx.AsyncClient, StartRunRequest, list[ReplayTick], asyncio.Event],
     Awaitable[str],
 ]
+
+_CORE_PUBLISH_MAX_ATTEMPTS = 3
+_CORE_PUBLISH_RETRY_DELAY_SECONDS = 0.05
+
+
+def _utc_now() -> str:
+    return datetime.now(UTC).isoformat().replace("+00:00", "Z")
+
+
+def _run_context(payload: StartRunRequest) -> dict[str, object]:
+    return {
+        "bot_id": payload.bot_id,
+        "bot_version": payload.bot_version,
+        "run_id": payload.run_id,
+        "scenario_id": payload.scenario_id,
+        "session_id": payload.session_id,
+    }
+
+
+def _log_event(level: str, event: str, **fields: object) -> None:
+    payload = {
+        "event": event,
+        "level": level,
+        "service": "bot_runner",
+        "timestamp": _utc_now(),
+        **fields,
+    }
+    message = json.dumps(payload, sort_keys=True)
+
+    if level == "error":
+        logger.error(message)
+        return
+
+    if level == "warning":
+        logger.warning(message)
+        return
+
+    logger.info(message)
 
 
 class RunnerService:
@@ -51,26 +96,69 @@ class RunnerService:
         return sum(0 if task.done() else 1 for task in self._tasks.values())
 
     async def start_run(self, payload: StartRunRequest) -> None:
+        _log_event("info", "run_start_requested", **_run_context(payload))
         if (payload.bot_id, payload.bot_version) not in self._executors:
+            _log_event(
+                "warning",
+                "run_rejected",
+                reason="unsupported_bot_version",
+                **_run_context(payload),
+            )
             raise ValueError("unsupported bot version")
         if payload.run_id in self._tasks and not self._tasks[payload.run_id].done():
+            _log_event(
+                "warning",
+                "run_rejected",
+                reason="run_already_active",
+                **_run_context(payload),
+            )
             raise ValueError("run already active")
+        try:
+            self._validate_bot_config(payload)
+        except ValueError as exc:
+            _log_event("warning", "run_rejected", reason=str(exc), **_run_context(payload))
+            raise
 
         ticks = await self._load_replay_ticks(payload.scenario_id)
         if not ticks:
+            _log_event(
+                "warning",
+                "run_rejected",
+                reason="empty_replay_ticks",
+                **_run_context(payload),
+            )
             raise ValueError("scenario returned no replay ticks")
+        try:
+            self._validate_replay_ticks(ticks)
+        except ValueError as exc:
+            _log_event("warning", "run_rejected", reason=str(exc), **_run_context(payload))
+            raise
 
         stop_event = asyncio.Event()
         task = asyncio.create_task(self._execute_run(payload, ticks, stop_event))
         self._stop_events[payload.run_id] = stop_event
         self._tasks[payload.run_id] = task
+        _log_event(
+            "info",
+            "run_accepted",
+            active_run_count=self.active_run_count(),
+            replay_tick_count=len(ticks),
+            **_run_context(payload),
+        )
 
     async def stop_run(self, run_id: str) -> None:
         stop_event = self._stop_events.get(run_id)
         if stop_event is None:
+            _log_event(
+                "warning",
+                "run_stop_rejected",
+                reason="run_not_found",
+                run_id=run_id,
+            )
             raise KeyError(run_id)
 
         stop_event.set()
+        _log_event("info", "run_stop_requested", run_id=run_id)
 
     async def _execute_run(
         self,
@@ -78,6 +166,12 @@ class RunnerService:
         ticks: list[ReplayTick],
         stop_event: asyncio.Event,
     ) -> None:
+        _log_event(
+            "info",
+            "run_execution_started",
+            replay_tick_count=len(ticks),
+            **_run_context(payload),
+        )
         try:
             executor = self._executors[(payload.bot_id, payload.bot_version)]
             async with httpx.AsyncClient(timeout=self._timeout) as client:
@@ -85,10 +179,28 @@ class RunnerService:
                 await self._notify_heartbeat(client, payload.run_id)
                 final_status = await executor(client, payload, ticks, stop_event)
                 await self._notify_status(client, payload.run_id, final_status)
+                _log_event(
+                    "info",
+                    "run_execution_finished",
+                    status=final_status,
+                    **_run_context(payload),
+                )
         except Exception as exc:
+            _log_event(
+                "error",
+                "run_execution_failed",
+                error_message=str(exc),
+                error_type=type(exc).__name__,
+                **_run_context(payload),
+            )
             try:
                 async with httpx.AsyncClient(timeout=self._timeout) as client:
-                    await self._notify_status(client, payload.run_id, "failed", error_message=str(exc))
+                    await self._notify_status(
+                        client,
+                        payload.run_id,
+                        "failed",
+                        error_message=str(exc),
+                    )
             finally:
                 self._stop_events.pop(payload.run_id, None)
                 self._tasks.pop(payload.run_id, None)
@@ -124,6 +236,8 @@ class RunnerService:
 
             await self._publish_tick(client, tick)
             await self._notify_heartbeat(client, payload.run_id)
+            if stop_event.is_set():
+                return "stopped"
 
             if entry_index.get(tick.symbol) == index and tick.symbol in exit_index:
                 quantity = trade_notional / tick.price
@@ -177,6 +291,8 @@ class RunnerService:
 
             await self._publish_tick(client, tick)
             await self._notify_heartbeat(client, payload.run_id)
+            if stop_event.is_set():
+                return "stopped"
 
             if entry_index.get(tick.symbol) == index:
                 await self._publish_signal(
@@ -223,6 +339,8 @@ class RunnerService:
 
             await self._publish_tick(client, tick)
             await self._notify_heartbeat(client, payload.run_id)
+            if stop_event.is_set():
+                return "stopped"
 
             prices = price_history[tick.symbol]
             prices.append(tick.price)
@@ -292,10 +410,33 @@ class RunnerService:
 
         return [ReplayTick.model_validate(item) for item in payload.get("ticks", [])]
 
+    def _validate_bot_config(self, payload: StartRunRequest) -> None:
+        trade_notional = float(payload.config.get("trade_notional", 1000))
+        if trade_notional <= 0:
+            raise ValueError("trade_notional must be greater than 0")
+
+        tick_interval_ms = int(payload.config.get("tick_interval_ms", 250))
+        if tick_interval_ms < 0:
+            raise ValueError("tick_interval_ms must be greater than or equal to 0")
+
+        if (payload.bot_id, payload.bot_version) == ("moving-average-cross", "v1"):
+            fast_window = int(payload.config.get("fast_window", 2))
+            slow_window = int(payload.config.get("slow_window", 3))
+            if fast_window < 2 or slow_window <= fast_window:
+                raise ValueError("invalid moving-average config")
+
+    def _validate_replay_ticks(self, ticks: list[ReplayTick]) -> None:
+        previous_tick = ticks[0]
+        for tick in ticks[1:]:
+            if (tick.timestamp, tick.symbol) < (previous_tick.timestamp, previous_tick.symbol):
+                raise ValueError("replay ticks must be sorted by timestamp and symbol")
+            previous_tick = tick
+
     async def _publish_tick(self, client: httpx.AsyncClient, tick: ReplayTick) -> None:
-        response = await client.post(
+        await self._post_core_json_with_retry(
+            client,
             f"{self._core_trading_base_url}/internal/market/prices",
-            json={
+            {
                 "ticks": [
                     {
                         "symbol": tick.symbol,
@@ -306,12 +447,13 @@ class RunnerService:
                 ]
             },
         )
-        response.raise_for_status()
 
     async def _publish_signal(self, client: httpx.AsyncClient, signal: SignalEnvelope) -> None:
-        response = await client.post(
+        self._validate_signal_envelope(signal)
+        await self._post_core_json_with_retry(
+            client,
             f"{self._core_trading_base_url}/internal/signals",
-            json={
+            {
                 "strategy_id": signal.strategy_id,
                 "signal_id": signal.signal_id,
                 "run_id": signal.run_id,
@@ -325,6 +467,39 @@ class RunnerService:
                 "timestamp": signal.timestamp,
             },
         )
+        _log_event(
+            "info",
+            "signal_published",
+            bot_id=signal.bot_id,
+            bot_version=signal.bot_version,
+            run_id=signal.run_id,
+            signal_id=signal.signal_id,
+            side=signal.side,
+            strategy_id=signal.strategy_id,
+            symbol=signal.symbol,
+        )
+
+    async def _post_core_json_with_retry(
+        self,
+        client: httpx.AsyncClient,
+        url: str,
+        payload: dict[str, object],
+    ) -> None:
+        for attempt in range(1, _CORE_PUBLISH_MAX_ATTEMPTS + 1):
+            try:
+                response = await client.post(url, json=payload)
+            except httpx.TransportError:
+                if attempt >= _CORE_PUBLISH_MAX_ATTEMPTS:
+                    raise
+                await asyncio.sleep(_CORE_PUBLISH_RETRY_DELAY_SECONDS * attempt)
+                continue
+
+            if response.status_code >= 500 and attempt < _CORE_PUBLISH_MAX_ATTEMPTS:
+                await asyncio.sleep(_CORE_PUBLISH_RETRY_DELAY_SECONDS * attempt)
+                continue
+
+            response.raise_for_status()
+            return
         response.raise_for_status()
 
     def _make_signal(
@@ -337,7 +512,7 @@ class RunnerService:
         quantity: float = 0.0,
         notional: float = 0.0,
     ) -> SignalEnvelope:
-        return SignalEnvelope(
+        signal = SignalEnvelope(
             symbol=tick.symbol,
             side=side,
             quantity=quantity,
@@ -350,6 +525,26 @@ class RunnerService:
             bot_version=payload.bot_version,
             timestamp=tick.timestamp.isoformat().replace("+00:00", "Z"),
         )
+        self._validate_signal_envelope(signal)
+        return signal
+
+    def _validate_signal_envelope(self, signal: SignalEnvelope) -> None:
+        if signal.side not in {"buy", "sell"}:
+            raise ValueError("signal side must be buy or sell")
+        if not signal.symbol.strip():
+            raise ValueError("signal symbol is required")
+        if not signal.signal_id.strip():
+            raise ValueError("signal_id is required")
+        if not signal.strategy_id.strip() or not signal.run_id.strip():
+            raise ValueError("signal strategy_id and run_id are required")
+        if signal.quantity < 0 or signal.notional < 0:
+            raise ValueError("signal quantity and notional must be non-negative")
+        if (signal.quantity > 0) == (signal.notional > 0):
+            raise ValueError("signal must set exactly one of quantity or notional")
+        if signal.price_hint <= 0:
+            raise ValueError("signal price_hint must be greater than 0")
+        if not signal.timestamp.strip():
+            raise ValueError("signal timestamp is required")
 
     async def _sleep_or_stop(
         self,
@@ -382,6 +577,13 @@ class RunnerService:
             },
         )
         response.raise_for_status()
+        _log_event(
+            "info",
+            "status_callback_sent",
+            has_error=bool(error_message),
+            run_id=run_id,
+            status=status,
+        )
 
     async def _notify_heartbeat(
         self,

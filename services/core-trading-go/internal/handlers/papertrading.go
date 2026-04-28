@@ -28,6 +28,7 @@ type paperTradingEngine interface {
 	TimelineBySession(sessionID string) ([]papertrading.SessionTimelinePoint, error)
 	SubscribeTimeline() (papertrading.TimelineSubscription, func())
 	ListOrders(filter papertrading.OrderFilter) []papertrading.PaperOrder
+	ListOrdersBySession(sessionID string, filter papertrading.OrderFilter) ([]papertrading.PaperOrder, error)
 	PlaceMarketOrder(request papertrading.PlaceOrderRequest) (papertrading.PaperOrder, error)
 	ProcessSignal(signal papertrading.SignalV1) (papertrading.SignalExecution, error)
 	ApplyMarketPrices(ticks []marketdata.PriceTickV1) (int, error)
@@ -403,6 +404,15 @@ func NewPaperOrderHandler(engine paperTradingEngine) http.HandlerFunc {
 				writePaperTradingError(w, err)
 				return
 			}
+			if filter.SessionID != "" {
+				orders, err := engine.ListOrdersBySession(filter.SessionID, filter)
+				if err != nil {
+					writePaperTradingError(w, err)
+					return
+				}
+				writeJSON(w, http.StatusOK, paperOrdersResponse{Orders: orders})
+				return
+			}
 
 			writeJSON(w, http.StatusOK, paperOrdersResponse{
 				Orders: engine.ListOrders(filter),
@@ -500,9 +510,10 @@ func parseOrderFilter(r *http.Request) (papertrading.OrderFilter, error) {
 
 	query := r.URL.Query()
 	filter := papertrading.OrderFilter{
-		Symbol: query.Get("symbol"),
-		Limit:  limit,
-		Offset: offset,
+		SessionID: query.Get("session_id"),
+		Symbol:    query.Get("symbol"),
+		Limit:     limit,
+		Offset:    offset,
 	}
 
 	if side := query.Get("side"); side != "" {

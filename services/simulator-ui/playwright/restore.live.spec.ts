@@ -48,10 +48,11 @@ test("dashboard and historical routes stay coherent after core restart restore",
   await page.goto("/dashboard");
 
   await expect(page.getByRole("heading", { name: "Current-session live monitor" })).toBeVisible();
-  await expect(page.getByText("restore-session", { exact: true })).toBeVisible();
+  await expect(page.getByText("restore-session", { exact: true }).first()).toBeVisible();
   await expect(
     page.getByRole("table", { name: "Current positions" }).getByRole("cell", { name: "BTCUSDT" }),
   ).toBeVisible();
+  await page.getByRole("button", { name: "View alerts" }).click();
   await expect(page.getByText("Recent order flow available")).toBeVisible();
 
   await page.goto("/sessions?q=restore-session&selected=restore-session");
@@ -68,5 +69,5 @@ test("dashboard and historical routes stay coherent after core restart restore",
   await expect(
     page.getByRole("heading", { name: "Historical detail for restore-session" }),
   ).toBeVisible();
-  await expect(page.getByText("No SSE")).toBeVisible();
+  await expect(page.getByText("No SSE").first()).toBeVisible();
 });

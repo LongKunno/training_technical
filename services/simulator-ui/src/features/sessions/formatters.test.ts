@@ -4,11 +4,18 @@ import {
   buildSessionDetailPath,
   buildSessionHistorySearchParams,
   buildSessionsPath,
+  getStatusTone,
   parseSelectedSessionIdSearchParam,
   parseSessionHistorySearchParams,
 } from "./formatters";
 
 describe("session history route search params", () => {
+  it("maps session status badges consistently with terminal run states", () => {
+    expect(getStatusTone("running")).toBe("success");
+    expect(getStatusTone("stopped")).toBe("warning");
+    expect(getStatusTone("")).toBe("neutral");
+  });
+
   it("parses and rebuilds filters with the selected preview session", () => {
     const searchParams = new URLSearchParams(
       "q=paper-history&status=stopped&limit=50&offset=100&selected=paper-history",

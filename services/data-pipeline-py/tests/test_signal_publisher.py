@@ -2,6 +2,8 @@ import asyncio
 from datetime import UTC, datetime
 
 import app.services.signal_publisher as signal_publisher_module
+import httpx
+import pytest
 from app.schemas.strategy import StrategySignal
 from app.services.signal_publisher import SignalPublisher
 
@@ -25,6 +27,21 @@ class RecordingAsyncClient:
     async def post(self, url: str, json: dict[str, object]) -> DummyResponse:
         self._calls.append((url, json))
         return DummyResponse()
+
+
+class FailingAsyncClient:
+    def __init__(self, timeout: float) -> None:
+        self._timeout = timeout
+
+    async def __aenter__(self) -> "FailingAsyncClient":
+        return self
+
+    async def __aexit__(self, exc_type, exc, tb) -> None:
+        return None
+
+    async def post(self, url: str, json: dict[str, object]) -> DummyResponse:
+        request = httpx.Request("POST", url)
+        raise httpx.ConnectError("connection refused", request=request)
 
 
 def test_signal_publisher_posts_signals_to_core_trading(monkeypatch) -> None:
@@ -69,3 +86,30 @@ def test_signal_publisher_posts_signals_to_core_trading(monkeypatch) -> None:
             },
         )
     ]
+
+
+def test_signal_publisher_reports_core_publish_failure(monkeypatch) -> None:
+    monkeypatch.setattr(
+        signal_publisher_module.httpx,
+        "AsyncClient",
+        lambda timeout: FailingAsyncClient(timeout),
+    )
+
+    publisher = SignalPublisher(core_trading_internal_base_url="http://core_trading:8080")
+
+    with pytest.raises(RuntimeError, match="core trading signal publish failed"):
+        asyncio.run(
+            publisher.publish_signals(
+                [
+                    StrategySignal(
+                        strategy_id="baseline-trend",
+                        signal_id="baseline-buy-btc",
+                        symbol="BTCUSDT",
+                        side="buy",
+                        notional=100,
+                        price_hint=100,
+                        timestamp=datetime(2026, 4, 17, 0, 0, tzinfo=UTC),
+                    )
+                ]
+            )
+        )
